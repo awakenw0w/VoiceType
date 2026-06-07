@@ -1,5 +1,8 @@
 import unittest
 
+from pynput import keyboard
+
+from win_whisper_dictation.hotkey_manager import key_to_token
 from win_whisper_dictation.hotkey_spec import parse_hotkey, token_matches, validate_hotkey_format
 
 
@@ -29,6 +32,19 @@ class HotkeySpecTests(unittest.TestCase):
 
     def test_side_specific_modifier_matches_generic_event(self):
         self.assertTrue(token_matches("shift_r", {"shift"}))
+
+    def test_russian_layout_letters_are_saved_as_latin_hotkeys(self):
+        spec = parse_hotkey("Shift+\u042f")
+
+        self.assertEqual(spec.canonical, "shift+z")
+        self.assertEqual(spec.display, "Shift + Z")
+
+    def test_keycode_vk_prefers_latin_physical_key(self):
+        self.assertEqual(key_to_token(keyboard.KeyCode.from_vk(0x5A)), "z")
+        self.assertEqual(key_to_token(keyboard.KeyCode.from_vk(0x41)), "a")
+
+    def test_keycode_russian_char_falls_back_to_latin_layout(self):
+        self.assertEqual(key_to_token(keyboard.KeyCode.from_char("\u044f")), "z")
 
 
 if __name__ == "__main__":

@@ -1,21 +1,32 @@
 from __future__ import annotations
 
+import ctypes
 import os
+import sys
 import threading
+import time
 import tkinter as tk
+import tkinter.font as tkfont
 from dataclasses import replace
-from tkinter import messagebox, ttk
+from pathlib import Path
+from tkinter import messagebox
 
+from PIL import Image, ImageDraw, ImageFilter, ImageTk
+
+from . import autostart
 from .config import AppConfig
 from .hotkey_spec import parse_hotkey
 from .status import STATUS_LABELS, AppStatus
 
 
 APP_NAME = "VoiceType"
+WINDOW_WIDTH = 768
+WINDOW_HEIGHT = 626
+AA_SCALE = 4
 
 PROVIDER_LABELS = {
     "groq": "Нейросеть Groq",
-    "local": "Локально (медленнее, без интернета)",
+    "local": "Локально",
 }
 
 GROQ_MODEL_LABELS = {
@@ -32,12 +43,36 @@ LOCAL_MODEL_LABELS = {
     "distil-large-v3": "Быстрая большая модель",
 }
 
+COLORS = {
+    "shell": "#fbfaf8",
+    "header": "#fffefd",
+    "footer": "#fffefd",
+    "card": "#ffffff",
+    "field": "#f4f1ee",
+    "field_hover": "#eee9e4",
+    "border": "#e8e3dc",
+    "border_soft": "#d8cfc3",
+    "text": "#1b1c1c",
+    "muted": "#5a5147",
+    "caption": "#756b5f",
+    "accent": "#d4bd92",
+    "accent_soft": "#eadbc1",
+    "accent_hover": "#dfc99f",
+    "accent_text": "#251c0e",
+    "gold_deep": "#8a7652",
+    "graphite": "#2a2926",
+    "black": "#1b1c1c",
+    "white": "#fbf9f9",
+    "pill": "#f5f0e8",
+}
+
 
 class SettingsWindow:
     def __init__(self, app):
         self._app = app
         self._thread: threading.Thread | None = None
         self._root: tk.Tk | None = None
+        self._images: dict[str, tk.PhotoImage] = {}
 
     def open(self) -> None:
         if self._root:
@@ -57,109 +92,234 @@ class SettingsWindow:
         root = tk.Tk()
         self._root = root
         root.title(APP_NAME)
+        root.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
+        root.minsize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        root.maxsize(WINDOW_WIDTH, WINDOW_HEIGHT)
         root.resizable(False, False)
+        root.configure(bg=COLORS["shell"])
         root.protocol("WM_DELETE_WINDOW", lambda: self._hide(root))
+
+        _load_private_font(Path("fonts") / "ArchivoBlack-Regular.ttf")
+        _load_private_font(Path("fonts") / "Manrope-Variable.ttf")
+        fonts = _make_fonts(root)
+        self._load_assets(root)
+        self._apply_window_icon(root)
 
         hotkey_var = tk.StringVar(value=parse_hotkey(config.hotkey).display)
         hotkey_canonical = tk.StringVar(value=config.hotkey)
         status_var = tk.StringVar(value="")
         runtime_status_var = tk.StringVar(value="Статус: Готово")
+        hotkey_capture_active_var = tk.BooleanVar(value=False)
         provider_var = tk.StringVar(value=_label_for(PROVIDER_LABELS, config.provider))
         groq_model_var = tk.StringVar(value=_label_for(GROQ_MODEL_LABELS, config.groq_model))
         groq_key_status_var = tk.StringVar(value=_groq_key_status(config))
         model_var = tk.StringVar(value=_label_for(LOCAL_MODEL_LABELS, config.model))
-        autostart_var = tk.BooleanVar(value=config.autostart)
+        autostart_var = tk.BooleanVar(value=_autostart_state(config))
 
-        frame = ttk.Frame(root, padding=14)
-        frame.grid(row=0, column=0, sticky="nsew")
-        frame.columnconfigure(1, weight=1)
-
-        title = ttk.Label(frame, text=f"{APP_NAME} запущен", font=("Segoe UI", 10, "bold"))
-        title.grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
-        help_text = ttk.Label(
-            frame,
-            text="Откройте любое поле ввода, удерживайте горячую клавишу, говорите и отпустите её.",
-            foreground="#555555",
+        shell = tk.Frame(
+            root,
+            width=WINDOW_WIDTH,
+            height=WINDOW_HEIGHT,
+            bg=COLORS["shell"],
+            highlightbackground=COLORS["border"],
+            highlightthickness=1,
         )
-        help_text.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 12))
+        shell.place(x=0, y=0)
 
-        status_label = ttk.Label(frame, textvariable=runtime_status_var, foreground="#1f4f8f")
-        status_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        header = tk.Frame(shell, width=766, height=97, bg=COLORS["header"])
+        header.place(x=1, y=1)
+        tk.Frame(shell, width=766, height=1, bg=COLORS["border"]).place(x=1, y=98)
 
-        ttk.Label(frame, text="Горячая клавиша").grid(row=3, column=0, sticky="w", pady=(0, 6))
-        hotkey_entry = ttk.Entry(frame, textvariable=hotkey_var, state="readonly", width=28)
-        hotkey_entry.grid(row=3, column=1, sticky="ew", pady=(0, 6))
-        ttk.Button(frame, text="Назначить", command=lambda: record_hotkey()).grid(
-            row=3, column=2, padx=(8, 0), pady=(0, 6)
+        BrandMark(header, self._images.get("brand_mark")).place(x=32, y=25)
+        tk.Label(
+            header,
+            text=APP_NAME,
+            bg=COLORS["header"],
+            fg=COLORS["text"],
+            font=fonts["title"],
+        ).place(x=88, y=22)
+        tk.Label(
+            header,
+            text="Don’t type, just speak",
+            bg=COLORS["header"],
+            fg=COLORS["muted"],
+            font=fonts["caption_bold"],
+        ).place(x=89, y=58)
+        StatusPill(header, runtime_status_var, fonts["status"]).place(x=588, y=31)
+
+        content = tk.Frame(shell, width=766, height=444, bg=COLORS["shell"])
+        content.place(x=1, y=99)
+
+        hotkey_card = Card(content, 702, 102, radius=18)
+        hotkey_card.place(x=32, y=32)
+        tk.Label(
+            hotkey_card,
+            text="Горячая клавиша",
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            font=fonts["section"],
+        ).place(x=25, y=22)
+        tk.Label(
+            hotkey_card,
+            text="Клавиша для активации записи голоса",
+            bg=COLORS["card"],
+            fg=COLORS["caption"],
+            font=fonts["body_bold"],
+        ).place(x=25, y=56)
+        HotkeyField(
+            hotkey_card,
+            hotkey_var,
+            fonts["body"],
+            self._images.get("keyboard"),
+            width=250,
+            height=44,
+        ).place(x=292, y=24)
+        RoundedButton(
+            hotkey_card,
+            text="Назначить",
+            command=lambda: record_hotkey(),
+            font=fonts["button"],
+            width=122,
+            height=42,
+            fill=COLORS["accent_soft"],
+            hover_fill=COLORS["accent_hover"],
+            active_fill="#cba976",
+            active_var=hotkey_capture_active_var,
+            fg=COLORS["accent_text"],
+            radius=11,
+        ).place(x=554, y=25)
+
+        recognition_card = Card(content, 339, 253, radius=18)
+        recognition_card.place(x=32, y=158)
+        IconLabel(
+            recognition_card,
+            "Распознавание",
+            fonts["section"],
+            self._images.get("recognition"),
+            icon_size=20,
+        ).place(x=25, y=25)
+        groq_radio = RadioOption(
+            recognition_card,
+            provider_var,
+            value=PROVIDER_LABELS["groq"],
+            title="Нейросеть Groq",
+            subtitle="Быстрое облачное распознавание",
+            fonts=fonts,
         )
+        groq_radio.place(x=25, y=69)
+        local_radio = RadioOption(
+            recognition_card,
+            provider_var,
+            value=PROVIDER_LABELS["local"],
+            title="Локально",
+            subtitle="Медленнее, без интернета",
+            fonts=fonts,
+        )
+        local_radio.place(x=25, y=121)
 
-        ttk.Label(frame, text="Распознавание").grid(row=4, column=0, sticky="w", pady=6)
-        ttk.Combobox(
-            frame,
-            textvariable=provider_var,
-            values=tuple(PROVIDER_LABELS.values()),
-            state="readonly",
-            width=25,
-        ).grid(row=4, column=1, columnspan=2, sticky="ew", pady=6)
-
-        groq_model_label = ttk.Label(frame, text="Модель нейросети")
-        groq_model_label.grid(row=5, column=0, sticky="w", pady=6)
-        groq_model_combo = ttk.Combobox(
-            frame,
-            textvariable=groq_model_var,
+        groq_model_card = Card(content, 339, 160, radius=18)
+        _build_model_card(
+            groq_model_card,
+            title="Модель нейросети",
+            variable=groq_model_var,
             values=tuple(GROQ_MODEL_LABELS.values()),
-            state="readonly",
-            width=25,
+            status_var=None,
+            fonts=fonts,
+            images=self._images,
         )
-        groq_model_combo.grid(row=5, column=1, columnspan=2, sticky="ew", pady=6)
 
-        groq_key_label = ttk.Label(frame, textvariable=groq_key_status_var, foreground="#666666")
-        groq_key_label.grid(row=6, column=1, columnspan=2, sticky="w", pady=(0, 6))
-
-        local_model_label = ttk.Label(frame, text="Локальная модель")
-        local_model_label.grid(row=7, column=0, sticky="w", pady=6)
-        local_model_combo = ttk.Combobox(
-            frame,
-            textvariable=model_var,
+        local_model_card = Card(content, 339, 160, radius=18)
+        _build_model_card(
+            local_model_card,
+            title="Локальная модель",
+            variable=model_var,
             values=tuple(LOCAL_MODEL_LABELS.values()),
-            state="readonly",
-            width=25,
-        )
-        local_model_combo.grid(row=7, column=1, columnspan=2, sticky="ew", pady=6)
-
-        ttk.Checkbutton(frame, text="Запускать вместе с Windows", variable=autostart_var).grid(
-            row=8, column=1, columnspan=2, sticky="w", pady=4
+            status_var=None,
+            fonts=fonts,
+            images=self._images,
         )
 
-        ttk.Label(frame, textvariable=status_var, foreground="#555555").grid(
-            row=9, column=0, columnspan=3, sticky="w", pady=(8, 4)
-        )
+        autostart_card = Card(content, 339, 90, radius=18)
+        autostart_card.place(x=395, y=342)
+        IconLabel(
+            autostart_card,
+            "Запускать вместе с\nWindows",
+            fonts["button"],
+            self._images.get("power"),
+            icon_size=20,
+            lines=2,
+        ).place(x=25, y=25)
+        ToggleSwitch(autostart_card, autostart_var).place(x=258, y=31)
 
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=10, column=0, columnspan=3, sticky="e", pady=(10, 0))
-        ttk.Button(buttons, text="Выйти", command=lambda: exit_app(root)).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(buttons, text="Скрыть", command=lambda: self._hide(root)).grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(buttons, text="Сохранить", command=lambda: save()).grid(row=0, column=2)
+        footer = tk.Frame(shell, width=766, height=83, bg=COLORS["footer"])
+        footer.place(x=1, y=543)
+        tk.Frame(shell, width=766, height=1, bg=COLORS["border"]).place(x=1, y=542)
+        TextButton(
+            footer,
+            text="Выйти",
+            command=lambda: exit_app(root),
+            font=fonts["body"],
+        ).place(x=32, y=24)
+        tk.Label(
+            footer,
+            textvariable=status_var,
+            bg=COLORS["footer"],
+            fg=COLORS["caption"],
+            font=fonts["caption"],
+            anchor="w",
+            wraplength=360,
+        ).place(x=130, y=25, width=355, height=38)
+        RoundedButton(
+            footer,
+            text="Скрыть",
+            command=lambda: self._hide(root),
+            font=fonts["button"],
+            width=104,
+            height=42,
+            fill=COLORS["footer"],
+            hover_fill=COLORS["field"],
+            fg=COLORS["text"],
+            border=COLORS["border_soft"],
+            radius=11,
+        ).place(x=495, y=21)
+        RoundedButton(
+            footer,
+            text="Сохранить",
+            command=lambda: save(),
+            font=fonts["button"],
+            width=123,
+            height=42,
+            fill=COLORS["black"],
+            hover_fill="#33312e",
+            fg=COLORS["white"],
+            radius=11,
+            shadow=True,
+        ).place(x=611, y=21)
 
         def update_model_fields(*_args) -> None:
             provider = _value_for(PROVIDER_LABELS, provider_var.get(), "local")
             if provider == "groq":
-                groq_model_label.grid()
-                groq_model_combo.grid()
-                groq_key_label.grid()
-                local_model_label.grid_remove()
-                local_model_combo.grid_remove()
+                local_model_card.place_forget()
+                groq_model_card.place(x=395, y=158)
             else:
-                groq_model_label.grid_remove()
-                groq_model_combo.grid_remove()
-                groq_key_label.grid_remove()
-                local_model_label.grid()
-                local_model_combo.grid()
+                groq_model_card.place_forget()
+                local_model_card.place(x=395, y=158)
 
         provider_var.trace_add("write", update_model_fields)
         update_model_fields()
 
+        def current_config(hotkey: str | None = None) -> AppConfig:
+            return replace(
+                self._app.config,
+                hotkey=hotkey or hotkey_canonical.get(),
+                provider=_value_for(PROVIDER_LABELS, provider_var.get(), "local"),
+                groq_model=_value_for(GROQ_MODEL_LABELS, groq_model_var.get(), "whisper-large-v3-turbo"),
+                model=_value_for(LOCAL_MODEL_LABELS, model_var.get(), "tiny"),
+                autostart=bool(autostart_var.get()),
+            )
+
         def record_hotkey() -> None:
+            hotkey_capture_active_var.set(True)
             status_var.set("Нажмите и отпустите нужную горячую клавишу...")
 
             def update(display: str) -> None:
@@ -167,27 +327,36 @@ class SettingsWindow:
 
             def complete(canonical: str, display: str) -> None:
                 def apply() -> None:
+                    previous_canonical = hotkey_canonical.get()
+                    previous_display = hotkey_var.get()
                     hotkey_canonical.set(canonical)
                     hotkey_var.set(display)
-                    status_var.set("Горячая клавиша записана. Нажмите «Сохранить», чтобы применить.")
+                    try:
+                        new_config = current_config(hotkey=canonical)
+                        self._app.apply_settings(new_config)
+                        groq_key_status_var.set(_groq_key_status(new_config))
+                        status_var.set(f"Горячая клавиша применена: {display}.")
+                    except Exception as exc:
+                        hotkey_canonical.set(previous_canonical)
+                        hotkey_var.set(previous_display)
+                        messagebox.showerror("Ошибка горячей клавиши", str(exc), parent=root)
+                    finally:
+                        hotkey_capture_active_var.set(False)
 
                 root.after(0, apply)
 
             def error(message: str) -> None:
-                root.after(0, lambda: status_var.set(message))
+                def apply() -> None:
+                    hotkey_capture_active_var.set(False)
+                    status_var.set(message)
+
+                root.after(0, apply)
 
             self._app.begin_hotkey_capture(update, complete, error)
 
         def save() -> None:
             try:
-                new_config = replace(
-                    self._app.config,
-                    hotkey=hotkey_canonical.get(),
-                    provider=_value_for(PROVIDER_LABELS, provider_var.get(), "local"),
-                    groq_model=_value_for(GROQ_MODEL_LABELS, groq_model_var.get(), "whisper-large-v3-turbo"),
-                    model=_value_for(LOCAL_MODEL_LABELS, model_var.get(), "tiny"),
-                    autostart=bool(autostart_var.get()),
-                )
+                new_config = current_config()
                 self._app.apply_settings(new_config)
                 groq_key_status_var.set(_groq_key_status(new_config))
                 status_var.set("Сохранено.")
@@ -208,8 +377,52 @@ class SettingsWindow:
                 root.after(300, update_runtime_status)
 
         update_runtime_status()
-
         root.mainloop()
+
+    def _load_assets(self, root: tk.Tk) -> None:
+        self._images = {}
+        for key, relative in {
+            "brand_mark": Path("ui") / "voicetype-mark-48.png",
+            "app_icon_16": Path("brand") / "voicetype-16.png",
+            "app_icon_20": Path("brand") / "voicetype-20.png",
+            "app_icon_24": Path("brand") / "voicetype-24.png",
+            "app_icon_32": Path("brand") / "voicetype-32.png",
+            "app_icon_40": Path("brand") / "voicetype-40.png",
+            "app_icon_48": Path("brand") / "voicetype-48.png",
+            "app_icon_64": Path("brand") / "voicetype-64.png",
+            "app_icon_128": Path("brand") / "voicetype-128.png",
+            "app_icon_256": Path("brand") / "voicetype-256.png",
+            "keyboard": Path("figma") / "keyboard.png",
+            "recognition": Path("figma") / "recognition.png",
+            "model": Path("figma") / "model.png",
+            "chevron": Path("figma") / "chevron-down.png",
+            "power": Path("figma") / "power.png",
+        }.items():
+            path = _asset_path(relative)
+            if not path:
+                continue
+            try:
+                self._images[key] = tk.PhotoImage(master=root, file=str(path))
+            except tk.TclError:
+                continue
+
+    def _apply_window_icon(self, root: tk.Tk) -> None:
+        icons = [
+            self._images.get(f"app_icon_{size}")
+            for size in (256, 128, 64, 48, 40, 32, 24, 20, 16)
+        ]
+        icons = [icon for icon in icons if icon]
+        if icons:
+            try:
+                root.iconphoto(True, *icons)
+            except tk.TclError:
+                pass
+        ico = _asset_path(Path("brand") / "voicetype.ico")
+        if ico:
+            try:
+                root.iconbitmap(default=str(ico))
+            except tk.TclError:
+                pass
 
     def _hide(self, root: tk.Tk) -> None:
         self._app.cancel_hotkey_capture()
@@ -221,10 +434,610 @@ class SettingsWindow:
         self._root = None
 
 
+class SmoothCanvas(tk.Canvas):
+    def __init__(self, master, width: int, height: int, bg: str, cursor: str | None = None):
+        options = {"width": width, "height": height, "bg": bg, "highlightthickness": 0, "bd": 0}
+        if cursor:
+            options["cursor"] = cursor
+        super().__init__(master, **options)
+        self._image_refs: list[ImageTk.PhotoImage] = []
+
+    def _set_image(self, image: Image.Image) -> None:
+        self.delete("all")
+        photo = ImageTk.PhotoImage(image, master=self)
+        self._image_refs = [photo]
+        self.create_image(0, 0, image=photo, anchor="nw")
+
+
+class Card(SmoothCanvas):
+    def __init__(self, master, width: int, height: int, radius: int = 18):
+        self.content_bg = COLORS["card"]
+        super().__init__(master, width, height, COLORS["shell"])
+        self._width = width
+        self._height = height
+        self._radius = radius
+        self._draw()
+
+    def _draw(self) -> None:
+        image = _rounded_surface(
+            self._width,
+            self._height,
+            self._radius,
+            fill=COLORS["card"],
+            outline=COLORS["border"],
+            shadow=True,
+            shadow_color=(68, 54, 34, 20),
+            shadow_offset=(0, 4),
+            shadow_blur=8,
+        )
+        self._set_image(image)
+
+
+class BrandMark(tk.Frame):
+    def __init__(self, master, image: tk.PhotoImage | None):
+        super().__init__(master, width=48, height=48, bg=COLORS["header"])
+        if image:
+            tk.Label(self, image=image, bg=COLORS["header"], bd=0).place(x=0, y=0, width=48, height=48)
+        else:
+            badge = SmoothCanvas(self, 48, 48, COLORS["header"])
+            badge.place(x=0, y=0)
+            badge._set_image(_rounded_surface(48, 48, 13, COLORS["accent_soft"]))
+            badge.create_text(24, 24, text="V", fill=COLORS["text"], font=("Arial", 18, "bold"))
+
+
+class StatusPill(SmoothCanvas):
+    def __init__(self, master, variable: tk.StringVar, font: tkfont.Font):
+        super().__init__(master, 146, 34, COLORS["header"])
+        self._variable = variable
+        self._font = font
+        self._variable.trace_add("write", lambda *_: self._draw())
+        self._draw()
+
+    def _draw(self) -> None:
+        self._set_image(
+            _rounded_surface(
+                146,
+                34,
+                17,
+                fill=COLORS["pill"],
+                outline="#e4ded5",
+                shadow=False,
+            )
+        )
+        dot = _circle_photo(8, fill=COLORS["gold_deep"], shadow=True, master=self)
+        self._image_refs.append(dot)
+        self.create_image(21, 17, image=dot)
+        self.create_text(33, 17, text=self._variable.get(), anchor="w", fill="#5c513b", font=self._font)
+
+
+class IconLabel(tk.Frame):
+    def __init__(
+        self,
+        master,
+        text: str,
+        font: tkfont.Font,
+        image: tk.PhotoImage | None,
+        icon_size: int,
+        lines: int = 1,
+    ):
+        super().__init__(master, bg=COLORS["card"])
+        icon = tk.Canvas(self, width=icon_size, height=icon_size, bg=COLORS["card"], highlightthickness=0, bd=0)
+        icon.grid(row=0, column=0, sticky="n", pady=(2 if lines == 1 else 8, 0))
+        if image:
+            icon.create_image(icon_size // 2, icon_size // 2, image=image)
+        else:
+            dot = _circle_photo(icon_size, fill=COLORS["gold_deep"], master=icon)
+            icon._image_ref = dot
+            icon.create_image(icon_size // 2, icon_size // 2, image=dot)
+        tk.Label(
+            self,
+            text=text,
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            font=font,
+            justify="left",
+            anchor="w",
+        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+
+class HotkeyField(SmoothCanvas):
+    def __init__(
+        self,
+        master,
+        variable: tk.StringVar,
+        font: tkfont.Font,
+        image: tk.PhotoImage | None,
+        width: int,
+        height: int,
+    ):
+        super().__init__(master, width, height, COLORS["card"])
+        self._variable = variable
+        self._font = font
+        self._image = image
+        self._width = width
+        self._height = height
+        self._variable.trace_add("write", lambda *_: self._draw())
+        self._draw()
+
+    def _draw(self) -> None:
+        self._set_image(
+            _rounded_surface(
+                self._width,
+                self._height,
+                12,
+                fill=COLORS["field"],
+                outline=COLORS["border_soft"],
+                inner_highlight=True,
+            )
+        )
+        self.create_text(18, self._height // 2, text=self._variable.get(), anchor="w", fill=COLORS["text"], font=self._font, width=self._width - 56)
+        if self._image:
+            self._image_refs.append(self._image)
+            self.create_image(self._width - 20, self._height // 2, image=self._image)
+        else:
+            self.create_text(self._width - 20, self._height // 2, text="⌨", fill=COLORS["caption"], font=self._font)
+
+
+class SelectBox(SmoothCanvas):
+    _open_dropdown: "SelectBox | None" = None
+
+    def __init__(
+        self,
+        master,
+        variable: tk.StringVar,
+        values: tuple[str, ...],
+        font: tkfont.Font,
+        image: tk.PhotoImage | None,
+        width: int,
+        height: int,
+    ):
+        super().__init__(master, width, height, COLORS["card"], cursor="hand2")
+        self._variable = variable
+        self._values = values
+        self._font = font
+        self._image = image
+        self._width = width
+        self._height = height
+        self._hover = False
+        self._dropdown: tk.Toplevel | None = None
+        self._closed_at = 0.0
+        self._variable.trace_add("write", lambda *_: self._draw())
+        self.bind("<Button-1>", self._toggle_dropdown)
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self._draw()
+
+    def _enter(self, _event=None) -> None:
+        self._hover = True
+        self._draw()
+
+    def _leave(self, _event=None) -> None:
+        self._hover = False
+        self._draw()
+
+    def _draw(self) -> None:
+        self._set_image(
+            _rounded_surface(
+                self._width,
+                self._height,
+                12,
+                fill=COLORS["field_hover"] if self._hover else COLORS["field"],
+                outline=COLORS["border_soft"],
+                inner_highlight=True,
+            )
+        )
+        self.create_text(17, self._height // 2, text=self._variable.get(), anchor="w", fill=COLORS["text"], font=self._font, width=self._width - 56)
+        if self._image:
+            self._image_refs.append(self._image)
+            self.create_image(self._width - 20, self._height // 2, image=self._image)
+        else:
+            self.create_text(self._width - 20, self._height // 2, text="⌄", fill=COLORS["muted"], font=self._font)
+
+    def _toggle_dropdown(self, _event=None) -> None:
+        if time.monotonic() - self._closed_at < 0.12:
+            return
+        if self._dropdown:
+            self._close_dropdown()
+            return
+        if SelectBox._open_dropdown and SelectBox._open_dropdown is not self:
+            SelectBox._open_dropdown._close_dropdown()
+        SelectBox._open_dropdown = self
+        row_h = 40
+        width = self._width
+        height = max(row_h + 10, row_h * len(self._values) + 12)
+        dropdown = tk.Toplevel(self)
+        self._dropdown = dropdown
+        dropdown.overrideredirect(True)
+        dropdown.configure(bg=COLORS["shell"])
+        dropdown.geometry(f"{width}x{height}+{self.winfo_rootx()}+{self.winfo_rooty() + self._height + 6}")
+        dropdown.attributes("-topmost", True)
+        surface = SmoothCanvas(dropdown, width, height, COLORS["shell"])
+        surface.place(x=0, y=0)
+        surface._set_image(
+            _rounded_surface(
+                width,
+                height,
+                12,
+                fill=COLORS["card"],
+                outline=COLORS["border_soft"],
+                shadow=True,
+                shadow_blur=10,
+                shadow_offset=(0, 4),
+            )
+        )
+        for index, value in enumerate(self._values):
+            OptionRow(surface, value, self._variable.get() == value, self._font, lambda selected=value: self._select(selected)).place(
+                x=6,
+                y=5 + index * row_h,
+                width=width - 12,
+                height=row_h - 1,
+            )
+        dropdown.bind("<Escape>", lambda _event: self._close_dropdown())
+        dropdown.after(50, dropdown.focus_force)
+
+    def _select(self, value: str) -> None:
+        self._variable.set(value)
+        self._close_dropdown()
+
+    def _close_dropdown(self) -> None:
+        if self._dropdown:
+            self._dropdown.destroy()
+            self._dropdown = None
+            self._closed_at = time.monotonic()
+        if SelectBox._open_dropdown is self:
+            SelectBox._open_dropdown = None
+
+
+class OptionRow(SmoothCanvas):
+    def __init__(self, master, text: str, selected: bool, font: tkfont.Font, command):
+        super().__init__(master, 1, 1, COLORS["card"], cursor="hand2")
+        self._text = text
+        self._selected = selected
+        self._font = font
+        self._command = command
+        self._hover = False
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self.bind("<Button-1>", self._click)
+        self.bind("<Configure>", lambda _event: self._draw())
+
+    def _click(self, _event=None):
+        self._command()
+        return "break"
+
+    def _enter(self, _event=None) -> None:
+        self._hover = True
+        self._draw()
+
+    def _leave(self, _event=None) -> None:
+        self._hover = False
+        self._draw()
+
+    def _draw(self) -> None:
+        width = max(1, self.winfo_width())
+        height = max(1, self.winfo_height())
+        self._set_image(
+            _rounded_surface(
+                width,
+                height,
+                9,
+                fill=COLORS["field"] if self._hover or self._selected else COLORS["card"],
+                outline="",
+            )
+        )
+        self.create_text(12, height // 2, text=self._text, anchor="w", fill=COLORS["text"], font=self._font, width=width - 34)
+        if self._selected:
+            dot = _circle_photo(8, fill=COLORS["gold_deep"], master=self)
+            self._image_refs.append(dot)
+            self.create_image(width - 18, height // 2, image=dot)
+
+
+class RadioOption(tk.Frame):
+    def __init__(
+        self,
+        master,
+        variable: tk.StringVar,
+        value: str,
+        title: str,
+        subtitle: str,
+        fonts: dict[str, tkfont.Font],
+    ):
+        super().__init__(master, width=289, height=38, bg=COLORS["card"], cursor="hand2")
+        self._variable = variable
+        self._value = value
+        self._circle = SmoothCanvas(self, 22, 22, COLORS["card"], cursor="hand2")
+        self._circle.place(x=0, y=3)
+        tk.Label(self, text=title, bg=COLORS["card"], fg=COLORS["text"], font=fonts["button"], cursor="hand2").place(x=32, y=0)
+        tk.Label(self, text=subtitle, bg=COLORS["card"], fg=COLORS["caption"], font=fonts["caption"], cursor="hand2").place(x=32, y=21)
+        self._variable.trace_add("write", lambda *_: self._draw())
+        _bind_click_tree(self, self._select)
+        self._draw()
+
+    def _select(self, _event=None) -> None:
+        self._variable.set(self._value)
+
+    def _draw(self) -> None:
+        selected = self._variable.get() == self._value
+        self._circle._set_image(_radio_image(selected))
+
+
+class ToggleSwitch(SmoothCanvas):
+    def __init__(self, master, variable: tk.BooleanVar):
+        super().__init__(master, 52, 28, COLORS["card"], cursor="hand2")
+        self._variable = variable
+        self._variable.trace_add("write", lambda *_: self._draw())
+        self.bind("<Button-1>", self._toggle)
+        self._draw()
+
+    def _toggle(self, _event=None) -> None:
+        self._variable.set(not bool(self._variable.get()))
+
+    def _draw(self) -> None:
+        self._set_image(_toggle_image(bool(self._variable.get())))
+
+
+class RoundedButton(SmoothCanvas):
+    def __init__(
+        self,
+        master,
+        text: str,
+        command,
+        font: tkfont.Font,
+        width: int,
+        height: int,
+        fill: str,
+        hover_fill: str,
+        fg: str,
+        border: str = "",
+        radius: int = 11,
+        shadow: bool = False,
+        active_fill: str | None = None,
+        active_var: tk.BooleanVar | None = None,
+    ):
+        self.content_bg = getattr(master, "content_bg", None) or _bg(master)
+        super().__init__(master, width, height, self.content_bg, cursor="hand2")
+        self._text = text
+        self._command = command
+        self._font = font
+        self._width = width
+        self._height = height
+        self._fill = fill
+        self._hover_fill = hover_fill
+        self._fg = fg
+        self._border = border
+        self._radius = radius
+        self._shadow = shadow
+        self._active_fill = active_fill
+        self._active_var = active_var
+        self._hover = False
+        if self._active_var is not None:
+            self._active_var.trace_add("write", lambda *_: self._draw())
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self.bind("<ButtonRelease-1>", self._click)
+        self._draw()
+
+    def _enter(self, _event=None) -> None:
+        self._hover = True
+        self._draw()
+
+    def _leave(self, _event=None) -> None:
+        self._hover = False
+        self._draw()
+
+    def _click(self, _event=None) -> None:
+        if self._command:
+            self._command()
+
+    def _draw(self) -> None:
+        active = bool(self._active_var.get()) if self._active_var is not None else False
+        fill = self._active_fill if active and self._active_fill else self._hover_fill if self._hover else self._fill
+        self._set_image(
+            _rounded_surface(
+                self._width,
+                self._height,
+                self._radius,
+                fill=fill,
+                outline=self._border,
+                shadow=self._shadow or active,
+                shadow_blur=8 if active else 6,
+                shadow_offset=(0, 3 if active else 2),
+                shadow_color=(104, 79, 39, 48) if active else (0, 0, 0, 42),
+                inner_highlight=self._fill != COLORS["black"],
+            )
+        )
+        self.create_text(self._width // 2, self._height // 2, text=self._text, fill=self._fg, font=self._font)
+
+
+class TextButton(tk.Label):
+    def __init__(self, master, text: str, command, font: tkfont.Font):
+        super().__init__(master, text=text, bg=COLORS["footer"], fg=COLORS["muted"], font=font, cursor="hand2", padx=16, pady=8)
+        self._command = command
+        self.bind("<ButtonRelease-1>", lambda _event: self._command())
+        self.bind("<Enter>", lambda _event: self.configure(fg=COLORS["text"]))
+        self.bind("<Leave>", lambda _event: self.configure(fg=COLORS["muted"]))
+
+
+def _build_model_card(
+    card: Card,
+    title: str,
+    variable: tk.StringVar,
+    values: tuple[str, ...],
+    status_var: tk.StringVar | None,
+    fonts: dict[str, tkfont.Font],
+    images: dict[str, tk.PhotoImage],
+) -> None:
+    IconLabel(card, title, fonts["section"], images.get("model"), icon_size=18).place(x=25, y=25)
+    SelectBox(card, variable, values, fonts["body"], images.get("chevron"), width=289, height=54).place(x=25, y=69)
+    if status_var is not None:
+        tk.Label(card, textvariable=status_var, bg=COLORS["card"], fg=COLORS["caption"], font=fonts["caption"], anchor="w").place(
+            x=25,
+            y=126,
+            width=289,
+            height=18,
+        )
+
+
+def _rounded_surface(
+    width: int,
+    height: int,
+    radius: int,
+    fill: str,
+    outline: str = "",
+    shadow: bool = False,
+    shadow_color: tuple[int, int, int, int] = (0, 0, 0, 28),
+    shadow_offset: tuple[int, int] = (0, 3),
+    shadow_blur: int = 7,
+    inner_highlight: bool = False,
+) -> Image.Image:
+    scale = AA_SCALE
+    w, h = width * scale, height * scale
+    r = radius * scale
+    image = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    box = [2 * scale, 2 * scale, w - 2 * scale - 1, h - 3 * scale - 1]
+    if shadow:
+        shadow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadow_layer)
+        sx, sy = shadow_offset[0] * scale, shadow_offset[1] * scale
+        sd.rounded_rectangle([box[0] + sx, box[1] + sy, box[2] + sx, box[3] + sy], radius=r, fill=shadow_color)
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(shadow_blur * scale))
+        image.alpha_composite(shadow_layer)
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle(box, radius=r, fill=fill, outline=outline if outline else None, width=max(1, scale))
+    if inner_highlight:
+        draw.rounded_rectangle(
+            [box[0] + scale, box[1] + scale, box[2] - scale, box[3] - scale],
+            radius=max(1, r - scale),
+            outline=(255, 255, 255, 120),
+            width=max(1, scale // 2),
+        )
+    return image.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def _circle_photo(size: int, fill: str, master: tk.Widget, shadow: bool = False) -> ImageTk.PhotoImage:
+    scale = AA_SCALE
+    pad = 4 if shadow else 1
+    canvas = Image.new("RGBA", ((size + pad * 2) * scale, (size + pad * 2) * scale), (0, 0, 0, 0))
+    if shadow:
+        sd = ImageDraw.Draw(canvas)
+        sd.ellipse(
+            [(pad + 1) * scale, (pad + 2) * scale, (pad + size + 1) * scale, (pad + size + 2) * scale],
+            fill=(0, 0, 0, 52),
+        )
+        canvas = canvas.filter(ImageFilter.GaussianBlur(2 * scale))
+    draw = ImageDraw.Draw(canvas)
+    draw.ellipse([pad * scale, pad * scale, (pad + size) * scale, (pad + size) * scale], fill=fill)
+    image = canvas.resize((size + pad * 2, size + pad * 2), Image.Resampling.LANCZOS)
+    return ImageTk.PhotoImage(image, master=master)
+
+
+def _radio_image(selected: bool) -> Image.Image:
+    scale = AA_SCALE
+    width = height = 22
+    img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    if selected:
+        draw.ellipse([1 * scale, 1 * scale, 21 * scale, 21 * scale], fill=COLORS["gold_deep"])
+        draw.ellipse([6 * scale, 6 * scale, 16 * scale, 16 * scale], fill=COLORS["accent_soft"])
+        draw.ellipse([9 * scale, 9 * scale, 13 * scale, 13 * scale], fill=COLORS["graphite"])
+    else:
+        draw.ellipse([2 * scale, 2 * scale, 20 * scale, 20 * scale], fill=COLORS["card"], outline="#cfc5b8", width=2 * scale)
+    return img.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def _toggle_image(enabled: bool) -> Image.Image:
+    scale = AA_SCALE
+    width, height = 52, 28
+    img = Image.new("RGBA", (width * scale, height * scale), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    track = "#cdb88f" if enabled else "#e7e0d7"
+    outline = "#bea77c" if enabled else "#d4cabe"
+    draw.rounded_rectangle([1 * scale, 2 * scale, 51 * scale, 26 * scale], radius=13 * scale, fill=track, outline=outline, width=scale)
+    draw.rounded_rectangle([3 * scale, 4 * scale, 49 * scale, 24 * scale], radius=11 * scale, outline=(255, 255, 255, 98), width=scale)
+    knob_x = 27 if enabled else 3
+    shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    sd.ellipse([knob_x * scale, 4 * scale, (knob_x + 22) * scale, 26 * scale], fill=(0, 0, 0, 44))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(2 * scale))
+    img.alpha_composite(shadow)
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([knob_x * scale, 3 * scale, (knob_x + 22) * scale, 25 * scale], fill="#fffdf9", outline="#ffffff", width=scale)
+    draw.ellipse([(knob_x + 4) * scale, 7 * scale, (knob_x + 18) * scale, 21 * scale], outline=(255, 255, 255, 80), width=scale)
+    return img.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def _load_private_font(relative: Path) -> None:
+    if sys.platform != "win32":
+        return
+    path = _asset_path(relative)
+    if not path:
+        return
+    try:
+        ctypes.windll.gdi32.AddFontResourceExW(str(path), 0x10, 0)
+    except Exception:
+        pass
+
+
+def _make_fonts(root: tk.Tk) -> dict[str, tkfont.Font]:
+    families = set(tkfont.families(root))
+    title_family = "Archivo Black" if "Archivo Black" in families else "Bahnschrift"
+    if title_family not in families:
+        title_family = "Segoe UI Variable Display" if "Segoe UI Variable Display" in families else "Segoe UI"
+    ui_family = "Manrope" if "Manrope" in families else "Segoe UI Variable Display" if "Segoe UI Variable Display" in families else "Segoe UI"
+    return {
+        "title": tkfont.Font(root=root, family=title_family, size=-24, weight="normal"),
+        "section": tkfont.Font(root=root, family=ui_family, size=-19, weight="bold"),
+        "body": tkfont.Font(root=root, family=ui_family, size=-13, weight="bold"),
+        "body_bold": tkfont.Font(root=root, family=ui_family, size=-13, weight="bold"),
+        "button": tkfont.Font(root=root, family=ui_family, size=-13, weight="bold"),
+        "caption": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
+        "caption_bold": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
+        "status": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
+    }
+
+
+def _bind_click_tree(widget: tk.Widget, callback) -> None:
+    widget.bind("<Button-1>", callback)
+    for child in widget.winfo_children():
+        _bind_click_tree(child, callback)
+
+
+def _bg(widget: tk.Widget) -> str:
+    try:
+        return str(widget.cget("bg"))
+    except tk.TclError:
+        return COLORS["shell"]
+
+
+def _asset_path(relative: Path) -> Path | None:
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).parent / "assets" / relative)
+        bundle_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+        candidates.append(bundle_dir / "assets" / relative)
+    candidates.extend(
+        [
+            Path(__file__).resolve().parents[2] / "assets" / relative,
+            Path.cwd() / "assets" / relative,
+        ]
+    )
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
 def _groq_key_status(config: AppConfig) -> str:
     if os.environ.get(config.groq_api_key_env):
         return f"{config.groq_api_key_env}: найден"
     return f"{config.groq_api_key_env}: не задан"
+
+
+def _autostart_state(config: AppConfig) -> bool:
+    try:
+        return autostart.is_enabled()
+    except Exception:
+        return config.autostart
 
 
 def _label_for(labels: dict[str, str], value: str) -> str:

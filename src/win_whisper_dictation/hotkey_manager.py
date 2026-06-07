@@ -7,6 +7,7 @@ from pynput import keyboard
 
 from .hotkey_spec import (
     HotkeySpec,
+    RUSSIAN_LAYOUT_TO_LATIN,
     make_hotkey_spec,
     parse_hotkey,
     released_token_affects_hotkey,
@@ -18,6 +19,11 @@ from .hotkey_spec import (
 CaptureUpdate = Callable[[str], None]
 CaptureComplete = Callable[[str, str], None]
 CaptureError = Callable[[str], None]
+
+VK_TO_TOKEN = {
+    **{0x30 + index: str(index) for index in range(10)},
+    **{0x41 + index: chr(ord("a") + index) for index in range(26)},
+}
 
 
 class HotkeyManager:
@@ -187,10 +193,16 @@ def key_to_token(key: keyboard.Key | keyboard.KeyCode) -> str | None:
 
     if key in special_map:
         return special_map[key]
-    if isinstance(key, keyboard.KeyCode) and key.char:
-        char = key.char.lower()
-        if char == " ":
-            return "space"
-        if len(char) == 1:
-            return char
+    if isinstance(key, keyboard.KeyCode):
+        vk = getattr(key, "vk", None)
+        if isinstance(vk, int) and vk in VK_TO_TOKEN:
+            return VK_TO_TOKEN[vk]
+        if key.char:
+            char = key.char.lower()
+            if char == " ":
+                return "space"
+            if char in RUSSIAN_LAYOUT_TO_LATIN:
+                return RUSSIAN_LAYOUT_TO_LATIN[char]
+            if len(char) == 1 and char.isascii() and (char.isalpha() or char.isdigit()):
+                return char
     return None

@@ -143,7 +143,7 @@ class DictationApp:
             if save:
                 self._config_manager.save(config)
 
-        if autostart_changed:
+        if save or autostart_changed:
             autostart.set_autostart(config.autostart)
         self._tray.update_status(self._status)
 

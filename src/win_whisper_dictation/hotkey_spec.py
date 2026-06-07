@@ -87,6 +87,35 @@ TOKEN_ALIASES = {
     "bksp": "backspace",
 }
 
+RUSSIAN_LAYOUT_TO_LATIN = {
+    "\u0439": "q",
+    "\u0446": "w",
+    "\u0443": "e",
+    "\u043a": "r",
+    "\u0435": "t",
+    "\u043d": "y",
+    "\u0433": "u",
+    "\u0448": "i",
+    "\u0449": "o",
+    "\u0437": "p",
+    "\u0444": "a",
+    "\u044b": "s",
+    "\u0432": "d",
+    "\u0430": "f",
+    "\u043f": "g",
+    "\u0440": "h",
+    "\u043e": "j",
+    "\u043b": "k",
+    "\u0434": "l",
+    "\u044f": "z",
+    "\u0447": "x",
+    "\u0441": "c",
+    "\u043c": "v",
+    "\u0438": "b",
+    "\u0442": "n",
+    "\u044c": "m",
+}
+
 VK_CODES = {
     "backspace": 0x08,
     "tab": 0x09,
@@ -137,8 +166,9 @@ def normalize_token(raw: str) -> str:
     value = re.sub(r"\s+", " ", value)
     value = TOKEN_ALIASES.get(value, value)
     value = value.replace(" ", "_")
+    value = RUSSIAN_LAYOUT_TO_LATIN.get(value, value)
 
-    if len(value) == 1 and value.isalpha():
+    if len(value) == 1 and value.isascii() and value.isalpha():
         return value
     if len(value) == 1 and value.isdigit():
         return value
@@ -307,7 +337,7 @@ def _windows_hotkey_parts(hotkey: HotkeySpec) -> tuple[int, int | None]:
 def _vk_code(token: str) -> int | None:
     if token in VK_CODES:
         return VK_CODES[token]
-    if len(token) == 1 and token.isalpha():
+    if len(token) == 1 and token.isascii() and token.isalpha():
         return ord(token.upper())
     if len(token) == 1 and token.isdigit():
         return ord(token)
