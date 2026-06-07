@@ -11,6 +11,7 @@ from . import autostart
 from .config import AppConfig, ConfigManager
 from .hotkey_manager import HotkeyManager
 from .hotkey_spec import parse_hotkey, validate_hotkey_system
+from .i18n import t
 from .postprocess import postprocess_text
 from .recorder import AudioRecorder
 from .settings_window import SettingsWindow
@@ -29,7 +30,7 @@ class DictationApp:
     def __init__(self):
         self._single_instance = SingleInstance(APP_MUTEX_NAME)
         if self._single_instance.already_running:
-            messagebox.showinfo(APP_NAME, "Приложение уже запущено.")
+            messagebox.showinfo(APP_NAME, t("ru", "already_running"))
             raise SystemExit(0)
 
         setup_logging()
@@ -80,7 +81,7 @@ class DictationApp:
         LOG.info("Tray ready, starting hotkey listener")
         self._hotkeys.start()
         self._set_status(AppStatus.IDLE)
-        self._tray.notify(f"Приложение запущено. Удерживайте {parse_hotkey(self._config.hotkey).display} для диктовки.")
+        self._tray.notify(t(self._config.interface_language, "app_started", hotkey=parse_hotkey(self._config.hotkey).display))
         if self._config.preload_model:
             threading.Thread(target=self._preload_model, name="dictation-preload", daemon=True).start()
         if self._config.show_window_on_start:
@@ -264,7 +265,7 @@ def main() -> None:
         LOG.exception("Fatal startup error")
         messagebox.showerror(
             APP_NAME,
-            f"Не удалось запустить приложение. Лог:\n{log_path()}",
+            t("ru", "window_start_error", log=log_path()),
         )
         sys.exit(1)
 

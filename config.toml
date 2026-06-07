@@ -1,3 +1,6 @@
+[ui]
+interface_language = "ru"
+
 [dictation]
 hotkey = "shift_r"
 paste_mode = "clipboard"

@@ -8,11 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from .hotkey_spec import parse_hotkey, validate_hotkey_format
+from .i18n import normalize_language, normalize_local_model
 
 
 @dataclass(frozen=True)
 class AppConfig:
     hotkey: str = "shift_r"
+    interface_language: str = "ru"
     provider: str = "local"
     model: str = "tiny"
     groq_model: str = "whisper-large-v3-turbo"
@@ -52,6 +54,7 @@ class ConfigManager:
 
         data = tomllib.loads(self.path.read_text(encoding="utf-8"))
         values: dict[str, Any] = {}
+        values.update(data.get("ui", {}))
         values.update(data.get("dictation", {}))
         values.update(data.get("transcription", {}))
         values.update(data.get("audio", {}))
@@ -69,6 +72,11 @@ class ConfigManager:
                 config = replace(config, hotkey=normalized)
         except ValueError:
             config = replace(config, hotkey=AppConfig.hotkey)
+        config = replace(
+            config,
+            interface_language=normalize_language(config.interface_language),
+            model=normalize_local_model(config.model),
+        )
         return config
 
     def save(self, config: AppConfig) -> None:
@@ -95,6 +103,9 @@ def bundled_config_path() -> Path | None:
 def render_toml(config: AppConfig) -> str:
     return "\n".join(
         [
+            "[ui]",
+            f'interface_language = "{_escape(normalize_language(config.interface_language))}"',
+            "",
             "[dictation]",
             f'hotkey = "{_escape(config.hotkey)}"',
             f'paste_mode = "{_escape(config.paste_mode)}"',
@@ -112,7 +123,7 @@ def render_toml(config: AppConfig) -> str:
             f'groq_api_key_env = "{_escape(config.groq_api_key_env)}"',
             "",
             "[whisper]",
-            f'model = "{_escape(config.model)}"',
+            f'model = "{_escape(normalize_local_model(config.model))}"',
             f'language = "{_escape(config.language)}"',
             f'device = "{_escape(config.device)}"',
             f"vad_filter = {_bool(config.vad_filter)}",

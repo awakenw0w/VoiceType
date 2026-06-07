@@ -7,7 +7,8 @@ from pathlib import Path
 import pystray
 from PIL import Image, ImageDraw, ImageFilter
 
-from .status import AppStatus, STATUS_LABELS
+from .i18n import status_label, t
+from .status import AppStatus
 
 
 APP_NAME = "VoiceType"
@@ -50,7 +51,7 @@ class TrayController:
     def update_status(self, status: AppStatus, detail: str = "") -> None:
         if not self._icon:
             return
-        label = STATUS_LABELS.get(status, status.value)
+        label = status_label(self._app.config.interface_language, status)
         self._icon.title = f"{APP_NAME} - {label}"
         self._icon.icon = _make_icon(status, self._base_icon)
         try:
@@ -67,21 +68,23 @@ class TrayController:
             pass
 
     def _menu(self) -> pystray.Menu:
+        language = self._app.config.interface_language
         return pystray.Menu(
             pystray.MenuItem(self._pause_label, self._toggle_pause),
-            pystray.MenuItem("Настройки", lambda _icon, _item: self._app.open_settings()),
-            pystray.MenuItem("Перезагрузить настройки", lambda _icon, _item: self._app.reload_settings()),
+            pystray.MenuItem(t(language, "settings"), lambda _icon, _item: self._app.open_settings()),
+            pystray.MenuItem(t(language, "reload_settings"), lambda _icon, _item: self._app.reload_settings()),
             pystray.MenuItem(
-                "Автозапуск",
+                t(language, "autostart"),
                 lambda _icon, _item: self._app.toggle_autostart(),
                 checked=lambda _item: self._app.config.autostart,
             ),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Выход", lambda _icon, _item: self._app.stop()),
+            pystray.MenuItem(t(language, "exit"), lambda _icon, _item: self._app.stop()),
         )
 
     def _pause_label(self, _item) -> str:
-        return "Продолжить диктовку" if self._app.paused else "Пауза"
+        language = self._app.config.interface_language
+        return t(language, "resume") if self._app.paused else t(language, "pause")
 
     def _toggle_pause(self, _icon, _item) -> None:
         self._app.toggle_pause()

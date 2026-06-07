@@ -20,6 +20,24 @@ class TranscriptionProviderTests(unittest.TestCase):
         self.assertEqual(loaded.provider, "groq")
         self.assertEqual(loaded.groq_model, "whisper-large-v3")
 
+    def test_config_round_trip_keeps_interface_language(self):
+        config = replace(AppConfig(), interface_language="en")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            manager = ConfigManager(path)
+            manager.save(config)
+            loaded = manager.load()
+
+        self.assertEqual(loaded.interface_language, "en")
+
+    def test_config_normalizes_legacy_local_model(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            path.write_text('[whisper]\nmodel = "medium"\n', encoding="utf-8")
+            loaded = ConfigManager(path).load()
+
+        self.assertEqual(loaded.model, "large-v3")
+
     def test_groq_requires_api_key_env(self):
         env_name = "WIN_DICTATION_TEST_MISSING_GROQ_KEY"
         os.environ.pop(env_name, None)

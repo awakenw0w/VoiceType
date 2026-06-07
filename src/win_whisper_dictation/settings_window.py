@@ -9,39 +9,29 @@ import tkinter as tk
 import tkinter.font as tkfont
 from dataclasses import replace
 from pathlib import Path
-from tkinter import messagebox
 
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 from . import autostart
 from .config import AppConfig
 from .hotkey_spec import parse_hotkey
-from .status import STATUS_LABELS, AppStatus
+from .i18n import (
+    groq_model_labels,
+    language_labels,
+    local_model_labels,
+    normalize_language,
+    normalize_local_model,
+    provider_labels,
+    status_label,
+    t,
+)
+from .status import AppStatus
 
 
 APP_NAME = "VoiceType"
 WINDOW_WIDTH = 768
 WINDOW_HEIGHT = 626
 AA_SCALE = 4
-
-PROVIDER_LABELS = {
-    "groq": "Нейросеть Groq",
-    "local": "Локально",
-}
-
-GROQ_MODEL_LABELS = {
-    "whisper-large-v3-turbo": "Быстрая нейросеть (рекомендуется)",
-    "whisper-large-v3": "Точная нейросеть",
-}
-
-LOCAL_MODEL_LABELS = {
-    "tiny": "Самая быстрая (ниже точность)",
-    "base": "Быстрая",
-    "small": "Сбалансированная",
-    "medium": "Точная (медленнее)",
-    "large-v3": "Максимальная точность",
-    "distil-large-v3": "Быстрая большая модель",
-}
 
 COLORS = {
     "shell": "#fbfaf8",
@@ -86,6 +76,7 @@ class SettingsWindow:
             self._root.deiconify()
             self._root.lift()
             self._root.focus_force()
+            self._root.after(40, lambda: _enable_taskbar_icon(self._root))
 
     def _run(self) -> None:
         config = self._app.config
@@ -96,6 +87,7 @@ class SettingsWindow:
         root.minsize(WINDOW_WIDTH, WINDOW_HEIGHT)
         root.maxsize(WINDOW_WIDTH, WINDOW_HEIGHT)
         root.resizable(False, False)
+        root.overrideredirect(True)
         root.configure(bg=COLORS["shell"])
         root.protocol("WM_DELETE_WINDOW", lambda: self._hide(root))
 
@@ -104,17 +96,22 @@ class SettingsWindow:
         fonts = _make_fonts(root)
         self._load_assets(root)
         self._apply_window_icon(root)
+        _configure_borderless(root)
 
         hotkey_var = tk.StringVar(value=parse_hotkey(config.hotkey).display)
         hotkey_canonical = tk.StringVar(value=config.hotkey)
         status_var = tk.StringVar(value="")
-        runtime_status_var = tk.StringVar(value="Статус: Готово")
+        runtime_status_var = tk.StringVar(value="")
         hotkey_capture_active_var = tk.BooleanVar(value=False)
-        provider_var = tk.StringVar(value=_label_for(PROVIDER_LABELS, config.provider))
-        groq_model_var = tk.StringVar(value=_label_for(GROQ_MODEL_LABELS, config.groq_model))
+        interface_language_var = tk.StringVar()
+        current_language = tk.StringVar(value=normalize_language(config.interface_language))
+        provider_var = tk.StringVar(value=config.provider)
+        groq_model_var = tk.StringVar(value=config.groq_model)
         groq_key_status_var = tk.StringVar(value=_groq_key_status(config))
-        model_var = tk.StringVar(value=_label_for(LOCAL_MODEL_LABELS, config.model))
+        model_var = tk.StringVar(value=normalize_local_model(config.model))
         autostart_var = tk.BooleanVar(value=_autostart_state(config))
+        current_view = tk.StringVar(value="main")
+        provider_trace_id: str | None = None
 
         shell = tk.Frame(
             root,
@@ -130,197 +127,359 @@ class SettingsWindow:
         header.place(x=1, y=1)
         tk.Frame(shell, width=766, height=1, bg=COLORS["border"]).place(x=1, y=98)
 
-        BrandMark(header, self._images.get("brand_mark")).place(x=32, y=25)
-        tk.Label(
-            header,
-            text=APP_NAME,
-            bg=COLORS["header"],
-            fg=COLORS["text"],
-            font=fonts["title"],
-        ).place(x=88, y=22)
-        tk.Label(
-            header,
-            text="Don’t type, just speak",
-            bg=COLORS["header"],
-            fg=COLORS["muted"],
-            font=fonts["caption_bold"],
-        ).place(x=89, y=58)
-        StatusPill(header, runtime_status_var, fonts["status"]).place(x=588, y=31)
-
         content = tk.Frame(shell, width=766, height=444, bg=COLORS["shell"])
         content.place(x=1, y=99)
-
-        hotkey_card = Card(content, 702, 102, radius=18)
-        hotkey_card.place(x=32, y=32)
-        tk.Label(
-            hotkey_card,
-            text="Горячая клавиша",
-            bg=COLORS["card"],
-            fg=COLORS["text"],
-            font=fonts["section"],
-        ).place(x=25, y=22)
-        tk.Label(
-            hotkey_card,
-            text="Клавиша для активации записи голоса",
-            bg=COLORS["card"],
-            fg=COLORS["caption"],
-            font=fonts["body_bold"],
-        ).place(x=25, y=56)
-        HotkeyField(
-            hotkey_card,
-            hotkey_var,
-            fonts["body"],
-            self._images.get("keyboard"),
-            width=250,
-            height=44,
-        ).place(x=292, y=24)
-        RoundedButton(
-            hotkey_card,
-            text="Назначить",
-            command=lambda: record_hotkey(),
-            font=fonts["button"],
-            width=122,
-            height=42,
-            fill=COLORS["accent_soft"],
-            hover_fill=COLORS["accent_hover"],
-            active_fill="#cba976",
-            active_var=hotkey_capture_active_var,
-            fg=COLORS["accent_text"],
-            radius=11,
-        ).place(x=554, y=25)
-
-        recognition_card = Card(content, 339, 253, radius=18)
-        recognition_card.place(x=32, y=158)
-        IconLabel(
-            recognition_card,
-            "Распознавание",
-            fonts["section"],
-            self._images.get("recognition"),
-            icon_size=20,
-        ).place(x=25, y=25)
-        groq_radio = RadioOption(
-            recognition_card,
-            provider_var,
-            value=PROVIDER_LABELS["groq"],
-            title="Нейросеть Groq",
-            subtitle="Быстрое облачное распознавание",
-            fonts=fonts,
-        )
-        groq_radio.place(x=25, y=69)
-        local_radio = RadioOption(
-            recognition_card,
-            provider_var,
-            value=PROVIDER_LABELS["local"],
-            title="Локально",
-            subtitle="Медленнее, без интернета",
-            fonts=fonts,
-        )
-        local_radio.place(x=25, y=121)
-
-        groq_model_card = Card(content, 339, 160, radius=18)
-        _build_model_card(
-            groq_model_card,
-            title="Модель нейросети",
-            variable=groq_model_var,
-            values=tuple(GROQ_MODEL_LABELS.values()),
-            status_var=None,
-            fonts=fonts,
-            images=self._images,
-        )
-
-        local_model_card = Card(content, 339, 160, radius=18)
-        _build_model_card(
-            local_model_card,
-            title="Локальная модель",
-            variable=model_var,
-            values=tuple(LOCAL_MODEL_LABELS.values()),
-            status_var=None,
-            fonts=fonts,
-            images=self._images,
-        )
-
-        autostart_card = Card(content, 339, 90, radius=18)
-        autostart_card.place(x=395, y=342)
-        IconLabel(
-            autostart_card,
-            "Запускать вместе с\nWindows",
-            fonts["button"],
-            self._images.get("power"),
-            icon_size=20,
-            lines=2,
-        ).place(x=25, y=25)
-        ToggleSwitch(autostart_card, autostart_var).place(x=258, y=31)
 
         footer = tk.Frame(shell, width=766, height=83, bg=COLORS["footer"])
         footer.place(x=1, y=543)
         tk.Frame(shell, width=766, height=1, bg=COLORS["border"]).place(x=1, y=542)
-        TextButton(
-            footer,
-            text="Выйти",
-            command=lambda: exit_app(root),
-            font=fonts["body"],
-        ).place(x=32, y=24)
-        tk.Label(
-            footer,
-            textvariable=status_var,
-            bg=COLORS["footer"],
-            fg=COLORS["caption"],
-            font=fonts["caption"],
-            anchor="w",
-            wraplength=360,
-        ).place(x=130, y=25, width=355, height=38)
-        RoundedButton(
-            footer,
-            text="Скрыть",
-            command=lambda: self._hide(root),
-            font=fonts["button"],
-            width=104,
-            height=42,
-            fill=COLORS["footer"],
-            hover_fill=COLORS["field"],
-            fg=COLORS["text"],
-            border=COLORS["border_soft"],
-            radius=11,
-        ).place(x=495, y=21)
-        RoundedButton(
-            footer,
-            text="Сохранить",
-            command=lambda: save(),
-            font=fonts["button"],
-            width=123,
-            height=42,
-            fill=COLORS["black"],
-            hover_fill="#33312e",
-            fg=COLORS["white"],
-            radius=11,
-            shadow=True,
-        ).place(x=611, y=21)
 
-        def update_model_fields(*_args) -> None:
-            provider = _value_for(PROVIDER_LABELS, provider_var.get(), "local")
-            if provider == "groq":
-                local_model_card.place_forget()
-                groq_model_card.place(x=395, y=158)
-            else:
-                groq_model_card.place_forget()
-                local_model_card.place(x=395, y=158)
+        def language() -> str:
+            return normalize_language(current_language.get())
 
-        provider_var.trace_add("write", update_model_fields)
-        update_model_fields()
+        def text_value(key: str, **kwargs) -> str:
+            return t(language(), key, **kwargs)
 
-        def current_config(hotkey: str | None = None) -> AppConfig:
+        def provider_value(default: str = "local") -> str:
+            return _value_for_any((provider_labels("ru"), provider_labels("en")), provider_var.get(), default)
+
+        def groq_model_value(default: str = "whisper-large-v3-turbo") -> str:
+            return _value_for_any((groq_model_labels("ru"), groq_model_labels("en")), groq_model_var.get(), default)
+
+        def local_model_value(default: str = "tiny") -> str:
+            value = _value_for_any((local_model_labels("ru"), local_model_labels("en")), model_var.get(), default)
+            return normalize_local_model(value)
+
+        def selected_language(default: str | None = None) -> str:
+            return _value_for_any((language_labels("ru"), language_labels("en")), interface_language_var.get(), default or language())
+
+        def sync_display_variables() -> None:
+            lang = language()
+            provider_var.set(_label_for(provider_labels(lang), provider_value(config.provider)))
+            groq_model_var.set(_label_for(groq_model_labels(lang), groq_model_value(config.groq_model)))
+            model_var.set(_label_for(local_model_labels(lang), local_model_value(config.model)))
+            interface_language_var.set(_label_for(language_labels(lang), lang))
+
+        def clear_main_trace() -> None:
+            nonlocal provider_trace_id
+            if provider_trace_id:
+                try:
+                    provider_var.trace_remove("write", provider_trace_id)
+                except tk.TclError:
+                    pass
+                provider_trace_id = None
+
+        def clear_frame(frame: tk.Frame) -> None:
+            for child in frame.winfo_children():
+                child.destroy()
+
+        def render_header() -> None:
+            clear_frame(header)
+            BrandMark(header, self._images.get("brand_mark")).place(x=32, y=25)
+            tk.Label(
+                header,
+                text=APP_NAME,
+                bg=COLORS["header"],
+                fg=COLORS["text"],
+                font=fonts["title"],
+            ).place(x=88, y=22)
+            tk.Label(
+                header,
+                text=text_value("tagline"),
+                bg=COLORS["header"],
+                fg=COLORS["muted"],
+                font=fonts["caption_bold"],
+            ).place(x=89, y=58)
+            StatusPill(header, runtime_status_var, fonts["status"], width=170).place(x=488, y=31)
+            WindowButton(
+                header,
+                text="?",
+                tooltip=text_value("minimize"),
+                command=lambda: _minimize_window(root),
+                font=fonts["window"],
+            ).place(x=676, y=30)
+            WindowButton(
+                header,
+                text="?",
+                tooltip=text_value("close"),
+                command=lambda: self._hide(root),
+                font=fonts["window"],
+            ).place(x=718, y=30)
+            _bind_drag_tree(header, root, skip_types=(WindowButton,))
+
+        def render_main() -> None:
+            nonlocal provider_trace_id
+            current_view.set("main")
+            clear_main_trace()
+            sync_display_variables()
+            render_header()
+            clear_frame(content)
+            clear_frame(footer)
+
+            hotkey_card = Card(content, 702, 102, radius=18)
+            hotkey_card.place(x=32, y=32)
+            tk.Label(
+                hotkey_card,
+                text=text_value("hotkey"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["section"],
+            ).place(x=25, y=22)
+            tk.Label(
+                hotkey_card,
+                text=text_value("hotkey_subtitle"),
+                bg=COLORS["card"],
+                fg=COLORS["caption"],
+                font=fonts["body_bold"],
+            ).place(x=25, y=56)
+            HotkeyField(
+                hotkey_card,
+                hotkey_var,
+                fonts["body"],
+                self._images.get("keyboard"),
+                width=250,
+                height=44,
+            ).place(x=292, y=24)
+            RoundedButton(
+                hotkey_card,
+                text=text_value("change"),
+                command=lambda: record_hotkey(),
+                font=fonts["button"],
+                width=122,
+                height=42,
+                fill=COLORS["accent_soft"],
+                hover_fill=COLORS["accent_hover"],
+                active_fill="#cba976",
+                active_var=hotkey_capture_active_var,
+                fg=COLORS["accent_text"],
+                radius=11,
+            ).place(x=554, y=25)
+
+            recognition_card = Card(content, 339, 253, radius=18)
+            recognition_card.place(x=32, y=158)
+            IconLabel(
+                recognition_card,
+                text_value("recognition"),
+                fonts["section"],
+                self._images.get("recognition"),
+                icon_size=20,
+            ).place(x=25, y=25)
+            RadioOption(
+                recognition_card,
+                provider_var,
+                value=provider_labels(language())["groq"],
+                title=text_value("provider_groq"),
+                subtitle=text_value("provider_groq_subtitle"),
+                fonts=fonts,
+            ).place(x=25, y=69)
+            RadioOption(
+                recognition_card,
+                provider_var,
+                value=provider_labels(language())["local"],
+                title=text_value("provider_local"),
+                subtitle=text_value("provider_local_subtitle"),
+                fonts=fonts,
+            ).place(x=25, y=121)
+
+            groq_model_card = Card(content, 339, 160, radius=18)
+            _build_model_card(
+                groq_model_card,
+                title=text_value("groq_model"),
+                variable=groq_model_var,
+                values=tuple(groq_model_labels(language()).values()),
+                status_var=None,
+                fonts=fonts,
+                images=self._images,
+            )
+
+            local_model_card = Card(content, 339, 160, radius=18)
+            _build_model_card(
+                local_model_card,
+                title=text_value("local_model"),
+                variable=model_var,
+                values=tuple(local_model_labels(language()).values()),
+                status_var=None,
+                fonts=fonts,
+                images=self._images,
+            )
+
+            autostart_card = Card(content, 339, 90, radius=18)
+            autostart_card.place(x=395, y=342)
+            IconLabel(
+                autostart_card,
+                text_value("launch_with_windows"),
+                fonts["button"],
+                self._images.get("power"),
+                icon_size=20,
+                lines=2,
+            ).place(x=25, y=25)
+            ToggleSwitch(autostart_card, autostart_var).place(x=258, y=31)
+
+            def update_model_fields(*_args) -> None:
+                provider = provider_value("local")
+                if provider == "groq":
+                    local_model_card.place_forget()
+                    groq_model_card.place(x=395, y=158)
+                else:
+                    groq_model_card.place_forget()
+                    local_model_card.place(x=395, y=158)
+
+            provider_trace_id = provider_var.trace_add("write", update_model_fields)
+            update_model_fields()
+
+            TextButton(
+                footer,
+                text=text_value("exit"),
+                command=lambda: exit_app(root),
+                font=fonts["body"],
+            ).place(x=32, y=24)
+            TextButton(
+                footer,
+                text=text_value("settings"),
+                command=lambda: render_settings(),
+                font=fonts["body"],
+            ).place(x=96, y=24)
+            tk.Label(
+                footer,
+                textvariable=status_var,
+                bg=COLORS["footer"],
+                fg=COLORS["caption"],
+                font=fonts["caption"],
+                anchor="w",
+                wraplength=280,
+            ).place(x=212, y=25, width=278, height=38)
+            RoundedButton(
+                footer,
+                text=text_value("hide"),
+                command=lambda: self._hide(root),
+                font=fonts["button"],
+                width=104,
+                height=42,
+                fill=COLORS["footer"],
+                hover_fill=COLORS["field"],
+                fg=COLORS["text"],
+                border=COLORS["border_soft"],
+                radius=11,
+            ).place(x=495, y=21)
+            RoundedButton(
+                footer,
+                text=text_value("save"),
+                command=lambda: save(),
+                font=fonts["button"],
+                width=123,
+                height=42,
+                fill=COLORS["black"],
+                hover_fill="#33312e",
+                fg=COLORS["white"],
+                radius=11,
+                shadow=True,
+            ).place(x=611, y=21)
+
+        def render_settings() -> None:
+            current_view.set("settings")
+            clear_main_trace()
+            sync_display_variables()
+            render_header()
+            clear_frame(content)
+            clear_frame(footer)
+
+            settings_card = Card(content, 702, 248, radius=18)
+            settings_card.place(x=32, y=32)
+            tk.Label(
+                settings_card,
+                text=text_value("settings"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["section"],
+            ).place(x=25, y=25)
+            tk.Label(
+                settings_card,
+                text=text_value("settings_hint"),
+                bg=COLORS["card"],
+                fg=COLORS["caption"],
+                font=fonts["body_bold"],
+            ).place(x=25, y=58)
+            tk.Frame(settings_card, width=652, height=1, bg=COLORS["border"]).place(x=25, y=92)
+            tk.Label(
+                settings_card,
+                text=text_value("interface_language"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["button"],
+            ).place(x=25, y=120)
+            tk.Label(
+                settings_card,
+                text=text_value("interface_language_subtitle"),
+                bg=COLORS["card"],
+                fg=COLORS["caption"],
+                font=fonts["caption"],
+            ).place(x=25, y=146)
+            SelectBox(
+                settings_card,
+                interface_language_var,
+                tuple(language_labels(language()).values()),
+                fonts["body"],
+                self._images.get("chevron"),
+                width=270,
+                height=54,
+            ).place(x=397, y=118)
+
+            TextButton(
+                footer,
+                text=text_value("back"),
+                command=lambda: render_main(),
+                font=fonts["body"],
+            ).place(x=32, y=24)
+            tk.Label(
+                footer,
+                textvariable=status_var,
+                bg=COLORS["footer"],
+                fg=COLORS["caption"],
+                font=fonts["caption"],
+                anchor="w",
+                wraplength=360,
+            ).place(x=130, y=25, width=355, height=38)
+            RoundedButton(
+                footer,
+                text=text_value("apply"),
+                command=lambda: apply_language(False),
+                font=fonts["button"],
+                width=104,
+                height=42,
+                fill=COLORS["footer"],
+                hover_fill=COLORS["field"],
+                fg=COLORS["text"],
+                border=COLORS["border_soft"],
+                radius=11,
+            ).place(x=495, y=21)
+            RoundedButton(
+                footer,
+                text=text_value("save"),
+                command=lambda: apply_language(True),
+                font=fonts["button"],
+                width=123,
+                height=42,
+                fill=COLORS["black"],
+                hover_fill="#33312e",
+                fg=COLORS["white"],
+                radius=11,
+                shadow=True,
+            ).place(x=611, y=21)
+
+        def current_config(hotkey: str | None = None, interface_language: str | None = None) -> AppConfig:
             return replace(
                 self._app.config,
                 hotkey=hotkey or hotkey_canonical.get(),
-                provider=_value_for(PROVIDER_LABELS, provider_var.get(), "local"),
-                groq_model=_value_for(GROQ_MODEL_LABELS, groq_model_var.get(), "whisper-large-v3-turbo"),
-                model=_value_for(LOCAL_MODEL_LABELS, model_var.get(), "tiny"),
+                interface_language=interface_language or selected_language(),
+                provider=provider_value("local"),
+                groq_model=groq_model_value("whisper-large-v3-turbo"),
+                model=local_model_value("tiny"),
                 autostart=bool(autostart_var.get()),
             )
 
         def record_hotkey() -> None:
             hotkey_capture_active_var.set(True)
-            status_var.set("Нажмите и отпустите нужную горячую клавишу...")
+            status_var.set(text_value("press_hotkey"))
 
             def update(display: str) -> None:
                 root.after(0, lambda: hotkey_var.set(display))
@@ -335,11 +494,11 @@ class SettingsWindow:
                         new_config = current_config(hotkey=canonical)
                         self._app.apply_settings(new_config)
                         groq_key_status_var.set(_groq_key_status(new_config))
-                        status_var.set(f"Горячая клавиша применена: {display}.")
+                        status_var.set(text_value("hotkey_applied", hotkey=display))
                     except Exception as exc:
                         hotkey_canonical.set(previous_canonical)
                         hotkey_var.set(previous_display)
-                        messagebox.showerror("Ошибка горячей клавиши", str(exc), parent=root)
+                        status_var.set(f"{text_value('hotkey_error')}: {exc}")
                     finally:
                         hotkey_capture_active_var.set(False)
 
@@ -359,9 +518,23 @@ class SettingsWindow:
                 new_config = current_config()
                 self._app.apply_settings(new_config)
                 groq_key_status_var.set(_groq_key_status(new_config))
-                status_var.set("Сохранено.")
+                current_language.set(normalize_language(new_config.interface_language))
+                status_var.set(text_value("saved"))
+                render_main()
             except Exception as exc:
-                messagebox.showerror("Ошибка настроек", str(exc), parent=root)
+                status_var.set(f"{text_value('settings_error')}: {exc}")
+
+        def apply_language(save_changes: bool) -> None:
+            try:
+                selected = selected_language()
+                new_config = current_config(interface_language=selected)
+                self._app.apply_settings(new_config, save=save_changes)
+                current_language.set(normalize_language(selected))
+                groq_key_status_var.set(_groq_key_status(new_config))
+                status_var.set(text_value("saved") if save_changes else "")
+                render_settings()
+            except Exception as exc:
+                status_var.set(f"{text_value('settings_error')}: {exc}")
 
         def exit_app(root: tk.Tk) -> None:
             self._app.stop()
@@ -370,12 +543,14 @@ class SettingsWindow:
         def update_runtime_status() -> None:
             try:
                 status = AppStatus(self._app.status_text)
-                runtime_status_var.set(f"Статус: {STATUS_LABELS.get(status, status.value)}")
+                runtime_status_var.set(f"{text_value('status_prefix')}: {status_label(language(), status)}")
             except Exception:
-                runtime_status_var.set(f"Статус: {self._app.status_text}")
+                runtime_status_var.set(f"{text_value('status_prefix')}: {self._app.status_text}")
             if self._root:
                 root.after(300, update_runtime_status)
 
+        sync_display_variables()
+        render_main()
         update_runtime_status()
         root.mainloop()
 
@@ -448,6 +623,13 @@ class SmoothCanvas(tk.Canvas):
         self._image_refs = [photo]
         self.create_image(0, 0, image=photo, anchor="nw")
 
+    def _redraw_safe(self) -> None:
+        try:
+            if self.winfo_exists():
+                self._draw()
+        except tk.TclError:
+            pass
+
 
 class Card(SmoothCanvas):
     def __init__(self, master, width: int, height: int, radius: int = 18):
@@ -486,17 +668,18 @@ class BrandMark(tk.Frame):
 
 
 class StatusPill(SmoothCanvas):
-    def __init__(self, master, variable: tk.StringVar, font: tkfont.Font):
-        super().__init__(master, 146, 34, COLORS["header"])
+    def __init__(self, master, variable: tk.StringVar, font: tkfont.Font, width: int = 146):
+        super().__init__(master, width, 34, COLORS["header"])
+        self._width = width
         self._variable = variable
         self._font = font
-        self._variable.trace_add("write", lambda *_: self._draw())
+        self._variable.trace_add("write", lambda *_: self._redraw_safe())
         self._draw()
 
     def _draw(self) -> None:
         self._set_image(
             _rounded_surface(
-                146,
+                self._width,
                 34,
                 17,
                 fill=COLORS["pill"],
@@ -507,7 +690,7 @@ class StatusPill(SmoothCanvas):
         dot = _circle_photo(8, fill=COLORS["gold_deep"], shadow=True, master=self)
         self._image_refs.append(dot)
         self.create_image(21, 17, image=dot)
-        self.create_text(33, 17, text=self._variable.get(), anchor="w", fill="#5c513b", font=self._font)
+        self.create_text(33, 17, text=self._variable.get(), anchor="w", fill="#5c513b", font=self._font, width=self._width - 42)
 
 
 class IconLabel(tk.Frame):
@@ -556,7 +739,7 @@ class HotkeyField(SmoothCanvas):
         self._image = image
         self._width = width
         self._height = height
-        self._variable.trace_add("write", lambda *_: self._draw())
+        self._variable.trace_add("write", lambda *_: self._redraw_safe())
         self._draw()
 
     def _draw(self) -> None:
@@ -601,7 +784,7 @@ class SelectBox(SmoothCanvas):
         self._hover = False
         self._dropdown: tk.Toplevel | None = None
         self._closed_at = 0.0
-        self._variable.trace_add("write", lambda *_: self._draw())
+        self._variable.trace_add("write", lambda *_: self._redraw_safe())
         self.bind("<Button-1>", self._toggle_dropdown)
         self.bind("<Enter>", self._enter)
         self.bind("<Leave>", self._leave)
@@ -749,12 +932,19 @@ class RadioOption(tk.Frame):
         self._circle.place(x=0, y=3)
         tk.Label(self, text=title, bg=COLORS["card"], fg=COLORS["text"], font=fonts["button"], cursor="hand2").place(x=32, y=0)
         tk.Label(self, text=subtitle, bg=COLORS["card"], fg=COLORS["caption"], font=fonts["caption"], cursor="hand2").place(x=32, y=21)
-        self._variable.trace_add("write", lambda *_: self._draw())
+        self._variable.trace_add("write", lambda *_: self._redraw_safe())
         _bind_click_tree(self, self._select)
         self._draw()
 
     def _select(self, _event=None) -> None:
         self._variable.set(self._value)
+
+    def _redraw_safe(self) -> None:
+        try:
+            if self.winfo_exists():
+                self._draw()
+        except tk.TclError:
+            pass
 
     def _draw(self) -> None:
         selected = self._variable.get() == self._value
@@ -765,7 +955,7 @@ class ToggleSwitch(SmoothCanvas):
     def __init__(self, master, variable: tk.BooleanVar):
         super().__init__(master, 52, 28, COLORS["card"], cursor="hand2")
         self._variable = variable
-        self._variable.trace_add("write", lambda *_: self._draw())
+        self._variable.trace_add("write", lambda *_: self._redraw_safe())
         self.bind("<Button-1>", self._toggle)
         self._draw()
 
@@ -811,7 +1001,7 @@ class RoundedButton(SmoothCanvas):
         self._active_var = active_var
         self._hover = False
         if self._active_var is not None:
-            self._active_var.trace_add("write", lambda *_: self._draw())
+            self._active_var.trace_add("write", lambda *_: self._redraw_safe())
         self.bind("<Enter>", self._enter)
         self.bind("<Leave>", self._leave)
         self.bind("<ButtonRelease-1>", self._click)
@@ -856,6 +1046,38 @@ class TextButton(tk.Label):
         self.bind("<ButtonRelease-1>", lambda _event: self._command())
         self.bind("<Enter>", lambda _event: self.configure(fg=COLORS["text"]))
         self.bind("<Leave>", lambda _event: self.configure(fg=COLORS["muted"]))
+
+
+class WindowButton(SmoothCanvas):
+    def __init__(self, master, text: str, tooltip: str, command, font: tkfont.Font):
+        super().__init__(master, 32, 32, COLORS["header"], cursor="hand2")
+        self._text = text
+        self._tooltip = tooltip
+        self._command = command
+        self._font = font
+        self._hover = False
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self.bind("<ButtonRelease-1>", self._click)
+        self._draw()
+
+    def _enter(self, _event=None) -> None:
+        self._hover = True
+        self._draw()
+
+    def _leave(self, _event=None) -> None:
+        self._hover = False
+        self._draw()
+
+    def _click(self, _event=None) -> None:
+        if self._command:
+            self._command()
+
+    def _draw(self) -> None:
+        fill = COLORS["field"] if self._hover else COLORS["header"]
+        outline = COLORS["border"] if self._hover else ""
+        self._set_image(_rounded_surface(32, 32, 10, fill=fill, outline=outline, inner_highlight=self._hover))
+        self.create_text(16, 15, text=self._text, fill=COLORS["muted"], font=self._font)
 
 
 def _build_model_card(
@@ -966,6 +1188,75 @@ def _toggle_image(enabled: bool) -> Image.Image:
     return img.resize((width, height), Image.Resampling.LANCZOS)
 
 
+def _configure_borderless(root: tk.Tk) -> None:
+    root.overrideredirect(True)
+    root.bind("<Map>", lambda event: root.after(20, lambda: _restore_borderless(root)) if event.widget is root else None)
+    root.after(80, lambda: _enable_taskbar_icon(root, refresh=True))
+
+
+def _restore_borderless(root: tk.Tk) -> None:
+    if not root.winfo_exists() or root.state() != "normal":
+        return
+    root.overrideredirect(True)
+    _enable_taskbar_icon(root)
+
+
+def _minimize_window(root: tk.Tk) -> None:
+    root.update_idletasks()
+    root.overrideredirect(False)
+    root.iconify()
+
+
+def _enable_taskbar_icon(root: tk.Tk, refresh: bool = False) -> None:
+    if sys.platform != "win32" or not root.winfo_exists():
+        return
+    try:
+        root.update_idletasks()
+        user32 = ctypes.windll.user32
+        hwnds = {int(root.winfo_id())}
+        parent = int(user32.GetParent(root.winfo_id()))
+        if parent:
+            hwnds.add(parent)
+
+        get_long = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        set_long = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        for hwnd in hwnds:
+            ex_style = int(get_long(hwnd, -20))
+            ex_style = (ex_style | 0x00040000) & ~0x00000080
+            set_long(hwnd, -20, ex_style)
+
+        if refresh and root.state() != "withdrawn" and not getattr(root, "_taskbar_refreshing", False):
+            root._taskbar_refreshing = True
+            root.withdraw()
+
+            def show_again() -> None:
+                if root.winfo_exists():
+                    root.deiconify()
+                    root.lift()
+                    root._taskbar_refreshing = False
+
+            root.after(25, show_again)
+    except Exception:
+        pass
+
+
+def _bind_drag_tree(widget: tk.Widget, root: tk.Tk, skip_types: tuple[type, ...] = ()) -> None:
+    if isinstance(widget, skip_types):
+        return
+
+    def start(event) -> None:
+        root._drag_offset = (event.x_root - root.winfo_x(), event.y_root - root.winfo_y())
+
+    def move(event) -> None:
+        offset_x, offset_y = getattr(root, "_drag_offset", (0, 0))
+        root.geometry(f"+{event.x_root - offset_x}+{event.y_root - offset_y}")
+
+    widget.bind("<Button-1>", start, add="+")
+    widget.bind("<B1-Motion>", move, add="+")
+    for child in widget.winfo_children():
+        _bind_drag_tree(child, root, skip_types=skip_types)
+
+
 def _load_private_font(relative: Path) -> None:
     if sys.platform != "win32":
         return
@@ -993,6 +1284,7 @@ def _make_fonts(root: tk.Tk) -> dict[str, tkfont.Font]:
         "caption": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
         "caption_bold": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
         "status": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
+        "window": tkfont.Font(root=root, family=ui_family, size=-16, weight="bold"),
     }
 
 
@@ -1044,9 +1336,12 @@ def _label_for(labels: dict[str, str], value: str) -> str:
     return labels.get(value, value)
 
 
-def _value_for(labels: dict[str, str], display: str, default: str) -> str:
+def _value_for_any(label_groups: tuple[dict[str, str], ...], display: str, default: str) -> str:
     display = display.strip()
-    for value, label in labels.items():
-        if display == label or display == value:
-            return value
+    for labels in label_groups:
+        if display in labels:
+            return display
+        for value, label in labels.items():
+            if display == label:
+                return value
     return default
