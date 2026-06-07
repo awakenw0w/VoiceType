@@ -1,0 +1,29 @@
+[dictation]
+hotkey = "shift_r"
+paste_mode = "clipboard"
+autostart = false
+restore_clipboard = true
+show_window_on_start = true
+clipboard_restore_delay_seconds = 1.0
+
+[transcription]
+provider = "groq"
+groq_model = "whisper-large-v3-turbo"
+groq_base_url = "https://api.groq.com/openai/v1"
+groq_api_key_env = "GROQ_API_KEY"
+
+[whisper]
+model = "tiny"
+language = ""
+device = "cpu"
+vad_filter = true
+compute_type_cpu = "int8"
+compute_type_cuda = "int8_float16"
+beam_size = 1
+enable_command_replacements = true
+preload_model = true
+
+[audio]
+sample_rate = 16000
+min_record_seconds = 0.35
+min_audio_rms = 0.0005
