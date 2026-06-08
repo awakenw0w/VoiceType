@@ -79,6 +79,14 @@ FILLER_WORDS = {
     "\u044d\u044d",
 }
 
+LIST_SUFFIX_PATTERNS = (
+    r"(?<!\w)как\s+(?:вс[её]\s+это|это\s+вс[её])\s+(?:сделаешь|сделаете|сделаю|сделаем|сделают|закончишь|закончите)\b",
+    r"(?<!\w)когда\s+(?:вс[её]\s+это|это\s+вс[её])?\s*(?:сделаешь|сделаете|сделаю|сделаем|сделают|закончишь|закончите)\b",
+    r"(?<!\w)(?:после\s+этого|как\s+только\s+сделаешь|как\s+только\s+сделаете)\b",
+    r"(?<!\w)(?:when|once)\s+(?:you\s+)?(?:are\s+)?(?:done|finish|finished)\b",
+    r"(?<!\w)(?:after\s+that|then\s+you)\b",
+)
+
 LIST_MARKERS = {
     "one": 1,
     "first": 1,
@@ -343,7 +351,21 @@ def _last_item_end(
     sentence = re.search(r"([.!?])\s+(?=[A-ZА-ЯЁ]|\u041a\u0430\u043a\b|\u043a\u0430\u043a\b|When\b|Then\b|After\b)", tail)
     if sentence:
         return last_match.end() + sentence.start(1)
+    semantic = _semantic_suffix_boundary(tail)
+    if semantic is not None:
+        return last_match.end() + semantic
     return default_end
+
+
+def _semantic_suffix_boundary(tail: str) -> int | None:
+    for pattern in LIST_SUFFIX_PATTERNS:
+        match = re.search(pattern, tail, flags=re.IGNORECASE)
+        if not match:
+            continue
+        before = tail[: match.start()].strip(" \t\n\r,.;:-")
+        if len(re.findall(r"[\w\u0400-\u04ff]+", before)) >= 2:
+            return match.start()
+    return None
 
 
 def _normalize_marker(marker: str) -> str:
