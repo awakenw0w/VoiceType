@@ -117,17 +117,26 @@ class SettingsWindow:
         groq_key_status_var = tk.StringVar(value=_groq_key_status(config))
         model_var = tk.StringVar(value=normalize_local_model(config.model))
         autostart_var = tk.BooleanVar(value=_autostart_state(config))
+        auto_cleanup_var = tk.BooleanVar(value=bool(config.auto_cleanup))
+        format_lists_var = tk.BooleanVar(value=bool(config.format_lists))
         microphone_var = tk.StringVar()
         microphone_status_var = tk.StringVar(value="")
         microphone_level_var = tk.DoubleVar(value=0.0)
         processing_device_var = tk.StringVar()
         processing_hint_var = tk.StringVar()
+        stats_value_vars = {
+            "words": tk.StringVar(value="0"),
+            "wpm": tk.StringVar(value="0"),
+            "streak": tk.StringVar(value="0"),
+            "sessions": tk.StringVar(value="0"),
+        }
         current_view = tk.StringVar(value="main")
         provider_trace_id: str | None = None
         main_trace_ids: list[tuple[tk.Variable, str]] = []
         microphone_trace_id: str | None = None
         processing_trace_id: str | None = None
         language_trace_id: str | None = None
+        cleanup_trace_ids: list[tuple[tk.Variable, str]] = []
         microphone_label_to_id: dict[str, str] = {}
         suppress_live_apply = False
 
@@ -213,6 +222,9 @@ class SettingsWindow:
             provider_var.set(_label_for(provider_labels(lang), provider_value(current_config_snapshot.provider)))
             groq_model_var.set(_label_for(groq_model_labels(lang), groq_model_value(current_config_snapshot.groq_model)))
             model_var.set(_label_for(local_model_labels(lang), local_model_value(current_config_snapshot.model)))
+            autostart_var.set(bool(current_config_snapshot.autostart))
+            auto_cleanup_var.set(bool(current_config_snapshot.auto_cleanup))
+            format_lists_var.set(bool(current_config_snapshot.format_lists))
             interface_language_var.set(_label_for(language_labels(lang), lang))
             processing_device_var.set(_label_for(processing_device_labels(lang), processing_device_value(current_config_snapshot.device)))
             processing_hint_var.set(processing_device_hint(lang, processing_device_value(current_config_snapshot.device)))
@@ -224,6 +236,13 @@ class SettingsWindow:
                 microphone_status_var.set(text_value("no_input_devices"))
             else:
                 microphone_status_var.set(text_value("microphone_ready"))
+
+        def sync_stats_variables() -> None:
+            stats = self._app.stats
+            stats_value_vars["words"].set(_format_int(stats.words_dictated))
+            stats_value_vars["wpm"].set(_format_number(stats.words_per_minute))
+            stats_value_vars["streak"].set(_format_int(stats.current_streak))
+            stats_value_vars["sessions"].set(_format_int(stats.dictation_sessions))
 
         def clear_main_trace() -> None:
             nonlocal provider_trace_id
@@ -255,6 +274,12 @@ class SettingsWindow:
             microphone_trace_id = None
             processing_trace_id = None
             language_trace_id = None
+            while cleanup_trace_ids:
+                variable, trace_id = cleanup_trace_ids.pop()
+                try:
+                    variable.trace_remove("write", trace_id)
+                except tk.TclError:
+                    pass
 
         def clear_frame(frame: tk.Frame) -> None:
             for child in frame.winfo_children():
@@ -612,8 +637,9 @@ class SettingsWindow:
             render_header()
             clear_frame(content)
             clear_frame(footer)
+            settings_body = _make_scroll_area(content, width=766, height=444, content_height=728)
 
-            language_card = Card(content, 702, 96, radius=18)
+            language_card = Card(settings_body, 702, 96, radius=18)
             language_card.place(x=32, y=18)
             tk.Label(
                 language_card,
@@ -639,7 +665,7 @@ class SettingsWindow:
                 height=48,
             ).place(x=397, y=24)
 
-            audio_card = Card(content, 702, 186, radius=18)
+            audio_card = Card(settings_body, 702, 186, radius=18)
             audio_card.place(x=32, y=126)
             tk.Label(
                 audio_card,
@@ -694,7 +720,7 @@ class SettingsWindow:
                 wraplength=610,
             ).place(x=25, y=148, width=650, height=20)
 
-            processing_card = Card(content, 702, 116, radius=18)
+            processing_card = Card(settings_body, 702, 116, radius=18)
             processing_card.place(x=32, y=324)
             tk.Label(
                 processing_card,
@@ -729,6 +755,63 @@ class SettingsWindow:
                 wraplength=650,
             ).place(x=25, y=88, width=650, height=18)
 
+            cleanup_card = Card(settings_body, 702, 132, radius=18)
+            cleanup_card.place(x=32, y=452)
+            tk.Label(
+                cleanup_card,
+                text=text_value("text_cleanup"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["section"],
+            ).place(x=25, y=18)
+            tk.Label(
+                cleanup_card,
+                text=text_value("auto_cleanup"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["button"],
+            ).place(x=25, y=54)
+            tk.Label(
+                cleanup_card,
+                text=text_value("auto_cleanup_subtitle"),
+                bg=COLORS["card"],
+                fg=COLORS["caption"],
+                font=fonts["caption"],
+                anchor="w",
+            ).place(x=25, y=77, width=540, height=18)
+            ToggleSwitch(cleanup_card, auto_cleanup_var).place(x=610, y=53)
+            tk.Label(
+                cleanup_card,
+                text=text_value("format_lists"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["button"],
+            ).place(x=25, y=100)
+            tk.Label(
+                cleanup_card,
+                text=text_value("format_lists_subtitle"),
+                bg=COLORS["card"],
+                fg=COLORS["caption"],
+                font=fonts["caption"],
+                anchor="w",
+            ).place(x=255, y=101, width=330, height=18)
+            ToggleSwitch(cleanup_card, format_lists_var).place(x=610, y=96)
+
+            stats_card = Card(settings_body, 702, 132, radius=18)
+            stats_card.place(x=32, y=596)
+            tk.Label(
+                stats_card,
+                text=text_value("statistics"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["section"],
+            ).place(x=25, y=18)
+            sync_stats_variables()
+            _place_stat(stats_card, text_value("stat_words_dictated"), stats_value_vars["words"], fonts, x=25, y=56)
+            _place_stat(stats_card, text_value("stat_words_per_minute"), stats_value_vars["wpm"], fonts, x=200, y=56)
+            _place_stat(stats_card, text_value("stat_current_streak"), stats_value_vars["streak"], fonts, x=375, y=56)
+            _place_stat(stats_card, text_value("stat_dictation_sessions"), stats_value_vars["sessions"], fonts, x=550, y=56)
+
             def update_microphone_status(*_args) -> None:
                 stop_microphone_test()
                 if no_devices:
@@ -751,6 +834,12 @@ class SettingsWindow:
             language_trace_id = interface_language_var.trace_add("write", update_language_choice)
             microphone_trace_id = microphone_var.trace_add("write", update_microphone_status)
             processing_trace_id = processing_device_var.trace_add("write", update_processing_hint)
+            cleanup_trace_ids.extend(
+                [
+                    (auto_cleanup_var, auto_cleanup_var.trace_add("write", lambda *_: apply_live_settings())),
+                    (format_lists_var, format_lists_var.trace_add("write", lambda *_: apply_live_settings())),
+                ]
+            )
             update_processing_hint()
 
             TextButton(
@@ -781,6 +870,7 @@ class SettingsWindow:
                 radius=11,
                 shadow=True,
             ).place(x=611, y=21)
+            settings_body._refresh_mousewheel_bindings()
             suppress_live_apply = False
 
         def current_config(hotkey: str | None = None, interface_language: str | None = None) -> AppConfig:
@@ -794,6 +884,8 @@ class SettingsWindow:
                 device=processing_device_value("cpu"),
                 microphone=selected_microphone_id(),
                 autostart=bool(autostart_var.get()),
+                auto_cleanup=bool(auto_cleanup_var.get()),
+                format_lists=bool(format_lists_var.get()),
             )
 
         def record_hotkey() -> None:
@@ -873,6 +965,7 @@ class SettingsWindow:
                 runtime_status_var.set(f"{text_value('status_prefix')}: {status_label(language(), status)}")
             except Exception:
                 runtime_status_var.set(f"{text_value('status_prefix')}: {self._app.status_text}")
+            sync_stats_variables()
             if self._root:
                 root.after(300, update_runtime_status)
 
@@ -1446,6 +1539,33 @@ def _build_model_card(
         )
 
 
+def _place_stat(
+    master: tk.Widget,
+    label: str,
+    value_var: tk.StringVar,
+    fonts: dict[str, tkfont.Font],
+    x: int,
+    y: int,
+) -> None:
+    tk.Label(
+        master,
+        textvariable=value_var,
+        bg=COLORS["card"],
+        fg=COLORS["text"],
+        font=fonts["metric"],
+        anchor="w",
+    ).place(x=x, y=y, width=130, height=34)
+    tk.Label(
+        master,
+        text=label,
+        bg=COLORS["card"],
+        fg=COLORS["caption"],
+        font=fonts["caption"],
+        anchor="w",
+        wraplength=130,
+    ).place(x=x, y=y + 39, width=138, height=32)
+
+
 def _rounded_surface(
     width: int,
     height: int,
@@ -1632,6 +1752,39 @@ def _bind_drag_tree(widget: tk.Widget, root: tk.Tk, skip_types: tuple[type, ...]
         _bind_drag_tree(child, root, skip_types=skip_types)
 
 
+def _make_scroll_area(master: tk.Widget, width: int, height: int, content_height: int) -> tk.Frame:
+    canvas = tk.Canvas(
+        master,
+        width=width,
+        height=height,
+        bg=COLORS["shell"],
+        highlightthickness=0,
+        borderwidth=0,
+        yscrollincrement=18,
+    )
+    canvas.place(x=0, y=0)
+    body = tk.Frame(canvas, width=width, height=content_height, bg=COLORS["shell"])
+    body.place(x=0, y=0)
+    canvas.create_window(0, 0, window=body, anchor="nw", width=width, height=content_height)
+    canvas.configure(scrollregion=(0, 0, width, content_height))
+
+    def on_wheel(event) -> str:
+        delta = -1 if event.delta > 0 else 1
+        canvas.yview_scroll(delta * 3, "units")
+        return "break"
+
+    _bind_mousewheel_tree(body, on_wheel)
+    canvas.bind("<MouseWheel>", on_wheel, add="+")
+    body._refresh_mousewheel_bindings = lambda: _bind_mousewheel_tree(body, on_wheel)
+    return body
+
+
+def _bind_mousewheel_tree(widget: tk.Widget, callback) -> None:
+    widget.bind("<MouseWheel>", callback, add="+")
+    for child in widget.winfo_children():
+        _bind_mousewheel_tree(child, callback)
+
+
 def _load_private_font(relative: Path) -> None:
     if sys.platform != "win32":
         return
@@ -1656,6 +1809,7 @@ def _make_fonts(root: tk.Tk) -> dict[str, tkfont.Font]:
         "body": tkfont.Font(root=root, family=ui_family, size=-13, weight="bold"),
         "body_bold": tkfont.Font(root=root, family=ui_family, size=-13, weight="bold"),
         "button": tkfont.Font(root=root, family=ui_family, size=-13, weight="bold"),
+        "metric": tkfont.Font(root=root, family=ui_family, size=-28, weight="bold"),
         "caption": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
         "caption_bold": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
         "status": tkfont.Font(root=root, family=ui_family, size=-11, weight="bold"),
@@ -1702,6 +1856,18 @@ def _groq_key_status(config: AppConfig) -> str:
 
 def _autostart_state(config: AppConfig) -> bool:
     return bool(config.autostart)
+
+
+def _format_int(value: int) -> str:
+    return f"{int(value):,}".replace(",", " ")
+
+
+def _format_number(value: float) -> str:
+    if value <= 0:
+        return "0"
+    if value >= 10:
+        return f"{value:.0f}"
+    return f"{value:.1f}"
 
 
 def _label_for(labels: dict[str, str], value: str) -> str:

@@ -36,6 +36,8 @@ class AppConfig:
     compute_type_cuda: str = "int8_float16"
     beam_size: int = 1
     enable_command_replacements: bool = True
+    auto_cleanup: bool = True
+    format_lists: bool = True
     preload_model: bool = True
 
 
@@ -117,6 +119,8 @@ def render_toml(config: AppConfig) -> str:
             f"show_window_on_start = {_bool(config.show_window_on_start)}",
             f"clipboard_restore_delay_seconds = {float(config.clipboard_restore_delay_seconds)}",
             f"enable_command_replacements = {_bool(config.enable_command_replacements)}",
+            f"auto_cleanup = {_bool(config.auto_cleanup)}",
+            f"format_lists = {_bool(config.format_lists)}",
             f"preload_model = {_bool(config.preload_model)}",
             "",
             "[transcription]",

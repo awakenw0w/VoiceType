@@ -56,6 +56,17 @@ class TranscriptionProviderTests(unittest.TestCase):
 
         self.assertEqual(loaded.device, "cuda")
 
+    def test_config_round_trip_keeps_cleanup_settings(self):
+        config = replace(AppConfig(), auto_cleanup=False, format_lists=False)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.toml"
+            manager = ConfigManager(path)
+            manager.save(config)
+            loaded = manager.load()
+
+        self.assertFalse(loaded.auto_cleanup)
+        self.assertFalse(loaded.format_lists)
+
     def test_gpu_device_attempts_cpu_fallback(self):
         config = replace(AppConfig(), device="cuda", compute_type_cuda="int8_float16", compute_type_cpu="int8")
         transcriber = LocalWhisperTranscriber(config)

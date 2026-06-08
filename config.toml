@@ -24,6 +24,8 @@ compute_type_cpu = "int8"
 compute_type_cuda = "int8_float16"
 beam_size = 1
 enable_command_replacements = true
+auto_cleanup = true
+format_lists = true
 preload_model = true
 
 [audio]

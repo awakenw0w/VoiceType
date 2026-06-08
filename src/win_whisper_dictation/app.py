@@ -15,6 +15,7 @@ from .i18n import t
 from .postprocess import postprocess_text
 from .recorder import AudioRecorder
 from .settings_window import SettingsWindow
+from .stats import DictationStats, StatsManager, stats_path_for_config
 from .status import AppStatus
 from .text_inserter import TextInserter, WindowInfo, get_foreground_window
 from .transcriber import DictationTranscriber
@@ -54,6 +55,7 @@ class DictationApp:
         self._lock = threading.RLock()
 
         self._recorder = AudioRecorder(self._config)
+        self._stats_manager = StatsManager(stats_path_for_config(self._config_manager.path))
         self._transcriber = DictationTranscriber(self._config)
         self._inserter = TextInserter(self._config)
         self._hotkeys = HotkeyManager(self._config.hotkey, self._recording_start, self._recording_stop)
@@ -72,6 +74,10 @@ class DictationApp:
     def status_text(self) -> str:
         with self._lock:
             return self._status.value
+
+    @property
+    def stats(self) -> DictationStats:
+        return self._stats_manager.stats
 
     def run(self) -> None:
         LOG.info("Starting tray icon")
@@ -200,17 +206,22 @@ class DictationApp:
 
         threading.Thread(
             target=self._process_recording,
-            args=(result.path,),
+            args=(result.path, result.duration_seconds),
             name="dictation-transcribe",
             daemon=True,
         ).start()
 
-    def _process_recording(self, path: Path) -> None:
+    def _process_recording(self, path: Path, duration_seconds: float) -> None:
         try:
             self._set_status(AppStatus.TRANSCRIBING)
             LOG.info("Transcribing %s", path)
             raw_text = self._transcriber.transcribe(path)
-            text = postprocess_text(raw_text, enable_commands=self._config.enable_command_replacements)
+            text = postprocess_text(
+                raw_text,
+                enable_commands=self._config.enable_command_replacements,
+                auto_cleanup=self._config.auto_cleanup,
+                format_lists=self._config.format_lists,
+            )
             LOG.info("Transcription complete, raw_chars=%s chars=%s raw=%r final=%r", len(raw_text), len(text), raw_text, text)
             if text:
                 self._set_status(AppStatus.PASTING)
@@ -219,6 +230,14 @@ class DictationApp:
                     target_title = self._target_window.title
                 LOG.info("Inserting text into hwnd=%s title=%r", target_hwnd, target_title)
                 self._inserter.insert(text, target_hwnd=target_hwnd)
+                stats = self._stats_manager.record_dictation(text, duration_seconds)
+                LOG.info(
+                    "Stats updated: words=%s sessions=%s wpm=%.1f streak=%s",
+                    stats.words_dictated,
+                    stats.dictation_sessions,
+                    stats.words_per_minute,
+                    stats.current_streak,
+                )
                 LOG.info("Text insert command sent")
                 self._set_status(AppStatus.PASTED)
             else:
