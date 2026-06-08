@@ -10,9 +10,12 @@ import tkinter.font as tkfont
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
+import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 from . import autostart
+from .audio_devices import SYSTEM_MICROPHONE_ID, list_input_devices, resolve_input_device
 from .config import AppConfig
 from .hotkey_spec import parse_hotkey
 from .i18n import (
@@ -21,11 +24,15 @@ from .i18n import (
     local_model_labels,
     normalize_language,
     normalize_local_model,
+    normalize_processing_device,
+    processing_device_hint,
+    processing_device_labels,
     provider_labels,
     status_label,
     t,
 )
 from .status import AppStatus
+from .transcriber import gpu_available
 
 
 APP_NAME = "VoiceType"
@@ -63,6 +70,7 @@ class SettingsWindow:
         self._thread: threading.Thread | None = None
         self._root: tk.Tk | None = None
         self._images: dict[str, tk.PhotoImage] = {}
+        self._stop_microphone_test = None
 
     def open(self) -> None:
         if self._root:
@@ -110,8 +118,16 @@ class SettingsWindow:
         groq_key_status_var = tk.StringVar(value=_groq_key_status(config))
         model_var = tk.StringVar(value=normalize_local_model(config.model))
         autostart_var = tk.BooleanVar(value=_autostart_state(config))
+        microphone_var = tk.StringVar()
+        microphone_status_var = tk.StringVar(value="")
+        microphone_level_var = tk.DoubleVar(value=0.0)
+        processing_device_var = tk.StringVar()
+        processing_hint_var = tk.StringVar()
         current_view = tk.StringVar(value="main")
         provider_trace_id: str | None = None
+        microphone_trace_id: str | None = None
+        processing_trace_id: str | None = None
+        microphone_label_to_id: dict[str, str] = {}
 
         shell = tk.Frame(
             root,
@@ -153,12 +169,59 @@ class SettingsWindow:
         def selected_language(default: str | None = None) -> str:
             return _value_for_any((language_labels("ru"), language_labels("en")), interface_language_var.get(), default or language())
 
+        def processing_device_value(default: str = "cpu") -> str:
+            value = _value_for_any((processing_device_labels("ru"), processing_device_labels("en")), processing_device_var.get(), default)
+            return normalize_processing_device(value)
+
+        def microphone_choices() -> tuple[tuple[str, ...], dict[str, str], bool, bool, str]:
+            labels = {text_value("microphone_system"): SYSTEM_MICROPHONE_ID}
+            aliases: dict[str, tuple[str, ...]] = {text_value("microphone_system"): ()}
+            devices = list_input_devices()
+            for device in devices:
+                label = device.display_name
+                if label in labels:
+                    label = f"{label} #{device.index}"
+                labels[label] = device.id
+                aliases[label] = device.aliases
+            values = tuple(labels.keys())
+            selected_id = str(self._app.config.microphone or "").strip()
+            selected_label = values[0]
+            selected_missing = False
+            if selected_id:
+                matched_label = next(
+                    (
+                        label
+                        for label, value in labels.items()
+                        if selected_id == value or selected_id in aliases.get(label, ())
+                    ),
+                    None,
+                )
+                selected_missing = matched_label is None
+                if matched_label:
+                    selected_label = matched_label
+            return values, labels, not devices, selected_missing, selected_label
+
+        def selected_microphone_id() -> str:
+            return microphone_label_to_id.get(microphone_var.get(), SYSTEM_MICROPHONE_ID)
+
         def sync_display_variables() -> None:
             lang = language()
-            provider_var.set(_label_for(provider_labels(lang), provider_value(config.provider)))
-            groq_model_var.set(_label_for(groq_model_labels(lang), groq_model_value(config.groq_model)))
-            model_var.set(_label_for(local_model_labels(lang), local_model_value(config.model)))
+            nonlocal microphone_label_to_id
+            current_config_snapshot = self._app.config
+            provider_var.set(_label_for(provider_labels(lang), provider_value(current_config_snapshot.provider)))
+            groq_model_var.set(_label_for(groq_model_labels(lang), groq_model_value(current_config_snapshot.groq_model)))
+            model_var.set(_label_for(local_model_labels(lang), local_model_value(current_config_snapshot.model)))
             interface_language_var.set(_label_for(language_labels(lang), lang))
+            processing_device_var.set(_label_for(processing_device_labels(lang), processing_device_value(current_config_snapshot.device)))
+            processing_hint_var.set(processing_device_hint(lang, processing_device_value(current_config_snapshot.device)))
+            values, microphone_label_to_id, no_devices, missing, selected_label = microphone_choices()
+            microphone_var.set(selected_label)
+            if missing:
+                microphone_status_var.set(text_value("selected_microphone_fallback"))
+            elif no_devices:
+                microphone_status_var.set(text_value("no_input_devices"))
+            else:
+                microphone_status_var.set(text_value("microphone_ready"))
 
         def clear_main_trace() -> None:
             nonlocal provider_trace_id
@@ -168,6 +231,17 @@ class SettingsWindow:
                 except tk.TclError:
                     pass
                 provider_trace_id = None
+
+        def clear_settings_traces() -> None:
+            nonlocal microphone_trace_id, processing_trace_id
+            for variable, trace_id in ((microphone_var, microphone_trace_id), (processing_device_var, processing_trace_id)):
+                if trace_id:
+                    try:
+                        variable.trace_remove("write", trace_id)
+                    except tk.TclError:
+                        pass
+            microphone_trace_id = None
+            processing_trace_id = None
 
         def clear_frame(frame: tk.Frame) -> None:
             for child in frame.winfo_children():
@@ -210,7 +284,9 @@ class SettingsWindow:
         def render_main() -> None:
             nonlocal provider_trace_id
             current_view.set("main")
+            stop_microphone_test()
             clear_main_trace()
+            clear_settings_traces()
             sync_display_variables()
             render_header()
             clear_frame(content)
@@ -375,54 +451,262 @@ class SettingsWindow:
                 shadow=True,
             ).place(x=611, y=21)
 
+        microphone_test_lock = threading.RLock()
+        microphone_test_state = {
+            "stream": None,
+            "active": False,
+            "target": 0.0,
+            "current": 0.0,
+            "peak": 0.0,
+            "deadline": 0.0,
+            "after": None,
+        }
+
+        def stop_microphone_test() -> None:
+            with microphone_test_lock:
+                after_id = microphone_test_state.get("after")
+                microphone_test_state["after"] = None
+                microphone_test_state["active"] = False
+                stream = microphone_test_state.get("stream")
+                microphone_test_state["stream"] = None
+            if after_id:
+                try:
+                    root.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+            if stream:
+                try:
+                    stream.stop()
+                    stream.close()
+                except Exception:
+                    pass
+            microphone_level_var.set(0.0)
+
+        def start_microphone_test() -> None:
+            stop_microphone_test()
+            selected_id = selected_microphone_id()
+            device, fallback = resolve_input_device(selected_id)
+
+            def callback(indata: np.ndarray, frames: int, time_info, status) -> None:
+                level = float(np.sqrt(np.mean(np.square(indata.reshape(-1)))))
+                normalized = min(1.0, level * 22.0)
+                with microphone_test_lock:
+                    microphone_test_state["target"] = max(float(microphone_test_state["target"]), normalized)
+                    microphone_test_state["peak"] = max(float(microphone_test_state["peak"]), normalized)
+
+            try:
+                stream = sd.InputStream(
+                    samplerate=self._app.config.sample_rate,
+                    channels=1,
+                    dtype="float32",
+                    callback=callback,
+                    device=device,
+                )
+            except Exception:
+                if not selected_id or fallback:
+                    microphone_status_var.set(text_value("microphone_unavailable"))
+                    return
+                try:
+                    stream = sd.InputStream(
+                        samplerate=self._app.config.sample_rate,
+                        channels=1,
+                        dtype="float32",
+                        callback=callback,
+                        device=None,
+                    )
+                    fallback = True
+                except Exception:
+                    microphone_status_var.set(text_value("microphone_unavailable"))
+                    return
+
+            try:
+                stream.start()
+            except Exception:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+                microphone_status_var.set(text_value("microphone_unavailable"))
+                return
+
+            with microphone_test_lock:
+                microphone_test_state.update(
+                    {
+                        "stream": stream,
+                        "active": True,
+                        "target": 0.0,
+                        "current": 0.0,
+                        "peak": 0.0,
+                        "deadline": time.monotonic() + 4.0,
+                    }
+                )
+            microphone_status_var.set(text_value("selected_microphone_fallback") if fallback else text_value("status_listening"))
+
+            def tick() -> None:
+                with microphone_test_lock:
+                    if not microphone_test_state["active"]:
+                        return
+                    current = float(microphone_test_state["current"])
+                    target = float(microphone_test_state["target"])
+                    current = current + (target - current) * 0.32
+                    microphone_test_state["current"] = current
+                    microphone_test_state["target"] = target * 0.72
+                    peak = float(microphone_test_state["peak"])
+                    done = time.monotonic() >= float(microphone_test_state["deadline"])
+
+                microphone_level_var.set(current)
+                if done:
+                    stop_microphone_test()
+                    microphone_status_var.set(text_value("microphone_ready") if peak >= 0.04 else text_value("no_input_detected"))
+                    return
+                with microphone_test_lock:
+                    microphone_test_state["after"] = root.after(33, tick)
+
+            tick()
+
+        self._stop_microphone_test = stop_microphone_test
+
         def render_settings() -> None:
+            nonlocal microphone_trace_id, processing_trace_id, microphone_label_to_id
             current_view.set("settings")
+            stop_microphone_test()
             clear_main_trace()
+            clear_settings_traces()
             sync_display_variables()
             render_header()
             clear_frame(content)
             clear_frame(footer)
 
-            settings_card = Card(content, 702, 248, radius=18)
-            settings_card.place(x=32, y=32)
+            language_card = Card(content, 702, 96, radius=18)
+            language_card.place(x=32, y=18)
             tk.Label(
-                settings_card,
+                language_card,
                 text=text_value("settings"),
                 bg=COLORS["card"],
                 fg=COLORS["text"],
                 font=fonts["section"],
-            ).place(x=25, y=25)
+            ).place(x=25, y=18)
             tk.Label(
-                settings_card,
-                text=text_value("settings_hint"),
-                bg=COLORS["card"],
-                fg=COLORS["caption"],
-                font=fonts["body_bold"],
-            ).place(x=25, y=58)
-            tk.Frame(settings_card, width=652, height=1, bg=COLORS["border"]).place(x=25, y=92)
-            tk.Label(
-                settings_card,
+                language_card,
                 text=text_value("interface_language"),
                 bg=COLORS["card"],
                 fg=COLORS["text"],
                 font=fonts["button"],
-            ).place(x=25, y=120)
-            tk.Label(
-                settings_card,
-                text=text_value("interface_language_subtitle"),
-                bg=COLORS["card"],
-                fg=COLORS["caption"],
-                font=fonts["caption"],
-            ).place(x=25, y=146)
+            ).place(x=25, y=55)
             SelectBox(
-                settings_card,
+                language_card,
                 interface_language_var,
                 tuple(language_labels(language()).values()),
                 fonts["body"],
                 self._images.get("chevron"),
                 width=270,
-                height=54,
-            ).place(x=397, y=118)
+                height=48,
+            ).place(x=397, y=24)
+
+            audio_card = Card(content, 702, 186, radius=18)
+            audio_card.place(x=32, y=126)
+            tk.Label(
+                audio_card,
+                text=text_value("audio"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["section"],
+            ).place(x=25, y=18)
+            tk.Label(
+                audio_card,
+                text=text_value("microphone"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["button"],
+            ).place(x=25, y=58)
+            values, microphone_label_to_id, no_devices, missing, selected_label = microphone_choices()
+            if microphone_var.get() not in values:
+                microphone_var.set(selected_label)
+            if missing:
+                microphone_status_var.set(text_value("selected_microphone_fallback"))
+            elif no_devices:
+                microphone_status_var.set(text_value("no_input_devices"))
+            SelectBox(
+                audio_card,
+                microphone_var,
+                values,
+                fonts["body"],
+                self._images.get("chevron"),
+                width=390,
+                height=48,
+            ).place(x=166, y=48)
+            RoundedButton(
+                audio_card,
+                text=text_value("microphone_test"),
+                command=lambda: start_microphone_test(),
+                font=fonts["button"],
+                width=142,
+                height=42,
+                fill=COLORS["accent_soft"],
+                hover_fill=COLORS["accent_hover"],
+                fg=COLORS["accent_text"],
+                radius=11,
+            ).place(x=566, y=51)
+            LevelMeter(audio_card, microphone_level_var, width=390, height=24).place(x=166, y=113)
+            tk.Label(
+                audio_card,
+                textvariable=microphone_status_var,
+                bg=COLORS["card"],
+                fg=COLORS["caption"],
+                font=fonts["caption"],
+                anchor="w",
+                wraplength=610,
+            ).place(x=25, y=148, width=650, height=20)
+
+            processing_card = Card(content, 702, 116, radius=18)
+            processing_card.place(x=32, y=324)
+            tk.Label(
+                processing_card,
+                text=text_value("local_processing"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["section"],
+            ).place(x=25, y=18)
+            tk.Label(
+                processing_card,
+                text=text_value("processing_device"),
+                bg=COLORS["card"],
+                fg=COLORS["text"],
+                font=fonts["button"],
+            ).place(x=25, y=59)
+            SelectBox(
+                processing_card,
+                processing_device_var,
+                tuple(processing_device_labels(language()).values()),
+                fonts["body"],
+                self._images.get("chevron"),
+                width=270,
+                height=48,
+            ).place(x=397, y=31)
+            tk.Label(
+                processing_card,
+                textvariable=processing_hint_var,
+                bg=COLORS["card"],
+                fg=COLORS["caption"],
+                font=fonts["caption"],
+                anchor="w",
+                wraplength=650,
+            ).place(x=25, y=88, width=650, height=18)
+
+            def update_microphone_status(*_args) -> None:
+                stop_microphone_test()
+                if no_devices:
+                    microphone_status_var.set(text_value("no_input_devices"))
+                else:
+                    microphone_status_var.set(text_value("microphone_ready"))
+                microphone_level_var.set(0.0)
+
+            def update_processing_hint(*_args) -> None:
+                processing_hint_var.set(processing_device_hint(language(), processing_device_value("cpu")))
+
+            microphone_trace_id = microphone_var.trace_add("write", update_microphone_status)
+            processing_trace_id = processing_device_var.trace_add("write", update_processing_hint)
+            update_processing_hint()
 
             TextButton(
                 footer,
@@ -442,7 +726,7 @@ class SettingsWindow:
             RoundedButton(
                 footer,
                 text=text_value("apply"),
-                command=lambda: apply_language(False),
+                command=lambda: apply_settings(False),
                 font=fonts["button"],
                 width=104,
                 height=42,
@@ -455,7 +739,7 @@ class SettingsWindow:
             RoundedButton(
                 footer,
                 text=text_value("save"),
-                command=lambda: apply_language(True),
+                command=lambda: apply_settings(True),
                 font=fonts["button"],
                 width=123,
                 height=42,
@@ -474,6 +758,8 @@ class SettingsWindow:
                 provider=provider_value("local"),
                 groq_model=groq_model_value("whisper-large-v3-turbo"),
                 model=local_model_value("tiny"),
+                device=processing_device_value("cpu"),
+                microphone=selected_microphone_id(),
                 autostart=bool(autostart_var.get()),
             )
 
@@ -524,14 +810,19 @@ class SettingsWindow:
             except Exception as exc:
                 status_var.set(f"{text_value('settings_error')}: {exc}")
 
-        def apply_language(save_changes: bool) -> None:
+        def apply_settings(save_changes: bool) -> None:
             try:
                 selected = selected_language()
                 new_config = current_config(interface_language=selected)
                 self._app.apply_settings(new_config, save=save_changes)
                 current_language.set(normalize_language(selected))
                 groq_key_status_var.set(_groq_key_status(new_config))
-                status_var.set(text_value("saved") if save_changes else "")
+                if new_config.device == "cuda" and not gpu_available():
+                    status_var.set(text_value("processing_gpu_unavailable"))
+                elif save_changes:
+                    status_var.set(f"{text_value('saved')} {text_value('processing_device_saved')}")
+                else:
+                    status_var.set(text_value("processing_device_saved"))
                 render_settings()
             except Exception as exc:
                 status_var.set(f"{text_value('settings_error')}: {exc}")
@@ -600,10 +891,14 @@ class SettingsWindow:
                 pass
 
     def _hide(self, root: tk.Tk) -> None:
+        if self._stop_microphone_test:
+            self._stop_microphone_test()
         self._app.cancel_hotkey_capture()
         root.withdraw()
 
     def _close(self, root: tk.Tk) -> None:
+        if self._stop_microphone_test:
+            self._stop_microphone_test()
         self._app.cancel_hotkey_capture()
         root.destroy()
         self._root = None
@@ -966,6 +1261,21 @@ class ToggleSwitch(SmoothCanvas):
         self._set_image(_toggle_image(bool(self._variable.get())))
 
 
+class LevelMeter(SmoothCanvas):
+    def __init__(self, master, variable: tk.DoubleVar, width: int, height: int):
+        super().__init__(master, width, height, COLORS["card"])
+        self._variable = variable
+        self._width = width
+        self._height = height
+        self._variable.trace_add("write", lambda *_: self._redraw_safe())
+        self._draw()
+
+    def _draw(self) -> None:
+        value = max(0.0, min(1.0, float(self._variable.get())))
+        image = _level_meter_image(self._width, self._height, value)
+        self._set_image(image)
+
+
 class RoundedButton(SmoothCanvas):
     def __init__(
         self,
@@ -1185,6 +1495,35 @@ def _toggle_image(enabled: bool) -> Image.Image:
     draw = ImageDraw.Draw(img)
     draw.ellipse([knob_x * scale, 3 * scale, (knob_x + 22) * scale, 25 * scale], fill="#fffdf9", outline="#ffffff", width=scale)
     draw.ellipse([(knob_x + 4) * scale, 7 * scale, (knob_x + 18) * scale, 21 * scale], outline=(255, 255, 255, 80), width=scale)
+    return img.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def _level_meter_image(width: int, height: int, value: float) -> Image.Image:
+    scale = AA_SCALE
+    w, h = width * scale, height * scale
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    radius = (height // 2) * scale
+    box = [1 * scale, 2 * scale, w - 1 * scale, h - 2 * scale]
+    draw.rounded_rectangle(box, radius=radius, fill=COLORS["field"], outline=COLORS["border_soft"], width=scale)
+    draw.rounded_rectangle(
+        [box[0] + scale, box[1] + scale, box[2] - scale, box[3] - scale],
+        radius=max(1, radius - scale),
+        outline=(255, 255, 255, 120),
+        width=scale,
+    )
+    fill_width = int((width - 4) * max(0.0, min(1.0, value))) * scale
+    if fill_width > 2 * scale:
+        fill_box = [2 * scale, 3 * scale, 2 * scale + fill_width, h - 3 * scale]
+        fill = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        fd = ImageDraw.Draw(fill)
+        fd.rounded_rectangle(fill_box, radius=max(1, radius - scale), fill=COLORS["accent_soft"])
+        glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow)
+        gd.rounded_rectangle(fill_box, radius=max(1, radius - scale), fill=(212, 189, 146, 56))
+        glow = glow.filter(ImageFilter.GaussianBlur(4 * scale))
+        img.alpha_composite(glow)
+        img.alpha_composite(fill)
     return img.resize((width, height), Image.Resampling.LANCZOS)
 
 

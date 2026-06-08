@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 
+from .audio_devices import resolve_input_device
 from .config import AppConfig
 
 
@@ -38,12 +39,13 @@ class AudioRecorder:
                 return
             self._chunks = []
             self._started_at = time.monotonic()
-            self._stream = sd.InputStream(
-                samplerate=self._config.sample_rate,
-                channels=1,
-                callback=self._callback,
-                dtype="float32",
-            )
+            device, fallback = resolve_input_device(self._config.microphone)
+            try:
+                self._stream = self._create_stream(device)
+            except Exception:
+                if not self._config.microphone or fallback:
+                    raise
+                self._stream = self._create_stream(None)
             self._stream.start()
 
     def stop(self) -> RecordingResult | None:
@@ -75,6 +77,15 @@ class AudioRecorder:
         with self._lock:
             if self._stream:
                 self._chunks.append(indata.copy())
+
+    def _create_stream(self, device: int | None) -> sd.InputStream:
+        return sd.InputStream(
+            samplerate=self._config.sample_rate,
+            channels=1,
+            callback=self._callback,
+            dtype="float32",
+            device=device,
+        )
 
 
 def _write_wav(audio: np.ndarray, sample_rate: int) -> Path:

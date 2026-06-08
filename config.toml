@@ -30,3 +30,4 @@ preload_model = true
 sample_rate = 16000
 min_record_seconds = 0.35
 min_audio_rms = 0.0005
+microphone = ""

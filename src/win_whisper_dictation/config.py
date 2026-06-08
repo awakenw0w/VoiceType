@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .hotkey_spec import parse_hotkey, validate_hotkey_format
-from .i18n import normalize_language, normalize_local_model
+from .i18n import normalize_language, normalize_local_model, normalize_processing_device
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,7 @@ class AppConfig:
     sample_rate: int = 16000
     min_record_seconds: float = 0.35
     min_audio_rms: float = 0.0005
+    microphone: str = ""
     compute_type_cpu: str = "int8"
     compute_type_cuda: str = "int8_float16"
     beam_size: int = 1
@@ -76,6 +77,8 @@ class ConfigManager:
             config,
             interface_language=normalize_language(config.interface_language),
             model=normalize_local_model(config.model),
+            device=normalize_processing_device(config.device),
+            microphone=str(config.microphone or "").strip(),
         )
         return config
 
@@ -125,7 +128,7 @@ def render_toml(config: AppConfig) -> str:
             "[whisper]",
             f'model = "{_escape(normalize_local_model(config.model))}"',
             f'language = "{_escape(config.language)}"',
-            f'device = "{_escape(config.device)}"',
+            f'device = "{_escape(normalize_processing_device(config.device))}"',
             f"vad_filter = {_bool(config.vad_filter)}",
             f'compute_type_cpu = "{_escape(config.compute_type_cpu)}"',
             f'compute_type_cuda = "{_escape(config.compute_type_cuda)}"',
@@ -135,6 +138,7 @@ def render_toml(config: AppConfig) -> str:
             f"sample_rate = {int(config.sample_rate)}",
             f"min_record_seconds = {float(config.min_record_seconds)}",
             f"min_audio_rms = {float(config.min_audio_rms)}",
+            f'microphone = "{_escape(config.microphone)}"',
             "",
         ]
     )

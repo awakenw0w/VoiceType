@@ -164,7 +164,7 @@ class LocalWhisperTranscriber:
         if config.device == "cpu":
             return [("cpu", config.compute_type_cpu)]
         if config.device == "cuda":
-            return [("cuda", config.compute_type_cuda)]
+            return [("cuda", config.compute_type_cuda), ("cpu", config.compute_type_cpu)]
         attempts: list[tuple[str, str]] = []
         if not self._cuda_disabled:
             attempts.append(("cuda", config.compute_type_cuda))
@@ -181,3 +181,12 @@ def _extract_text(response) -> str:
     if text:
         return str(text).strip()
     return str(response).strip()
+
+
+def gpu_available() -> bool:
+    try:
+        import ctranslate2
+
+        return int(ctranslate2.get_cuda_device_count()) > 0
+    except Exception:
+        return False
