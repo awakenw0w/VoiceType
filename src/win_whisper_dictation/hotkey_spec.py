@@ -9,6 +9,7 @@ from typing import Iterable
 
 
 MODIFIER_ORDER = ("ctrl", "alt", "shift", "win")
+MOUSE_ORDER = ("mouse_x1", "mouse_x2", "mouse_middle", "mouse_left", "mouse_right")
 MODIFIER_FAMILIES = {
     "ctrl": ("ctrl", "ctrl_l", "ctrl_r"),
     "alt": ("alt", "alt_l", "alt_r"),
@@ -50,6 +51,11 @@ DISPLAY_NAMES = {
     "enter": "Enter",
     "backspace": "Backspace",
     "caps_lock": "Caps Lock",
+    "mouse_x1": "Mouse Back",
+    "mouse_x2": "Mouse Forward",
+    "mouse_middle": "Middle Mouse",
+    "mouse_left": "Left Mouse",
+    "mouse_right": "Right Mouse",
 }
 
 TOKEN_ALIASES = {
@@ -85,6 +91,24 @@ TOKEN_ALIASES = {
     "del": "delete",
     "return": "enter",
     "bksp": "backspace",
+    "x1": "mouse_x1",
+    "x2": "mouse_x2",
+    "mouse back": "mouse_x1",
+    "mouse backward": "mouse_x1",
+    "back mouse": "mouse_x1",
+    "side mouse 1": "mouse_x1",
+    "mouse side 1": "mouse_x1",
+    "mouse forward": "mouse_x2",
+    "forward mouse": "mouse_x2",
+    "side mouse 2": "mouse_x2",
+    "mouse side 2": "mouse_x2",
+    "middle mouse": "mouse_middle",
+    "mouse middle": "mouse_middle",
+    "mouse wheel": "mouse_middle",
+    "left mouse": "mouse_left",
+    "mouse left": "mouse_left",
+    "right mouse": "mouse_right",
+    "mouse right": "mouse_right",
 }
 
 RUSSIAN_LAYOUT_TO_LATIN = {
@@ -174,6 +198,8 @@ def normalize_token(raw: str) -> str:
         return value
     if re.fullmatch(r"f([1-9]|1[0-9]|2[0-4])", value):
         return value
+    if value in MOUSE_ORDER:
+        return value
     if value in VK_CODES or value in ANY_MODIFIER:
         return value
     raise ValueError(f"Неподдерживаемая клавиша: {raw}")
@@ -238,8 +264,10 @@ def validate_hotkey_format(spec: HotkeySpec | str) -> ValidationResult:
         "win_r",
     }:
         return ValidationResult(False, "Нельзя использовать только Ctrl, Alt или Win")
-    if len(tokens) > 1 and all(token in ANY_MODIFIER for token in tokens):
-        return ValidationResult(False, "Сочетания только из модификаторов не поддерживаются")
+    if len(tokens) > 1 and all(token in ANY_MODIFIER for token in tokens) and not _allowed_modifier_only(tokens):
+        return ValidationResult(False, "Сочетание только из этих модификаторов не поддерживается")
+    if tokens & {"mouse_left", "mouse_right"} and len(tokens) == 1:
+        return ValidationResult(False, "Левую и правую кнопку мыши нельзя использовать отдельно")
     if "alt" in _generic_set(tokens) and "tab" in tokens:
         return ValidationResult(False, "Alt+Tab зарезервирован Windows")
     if {"ctrl", "alt"}.issubset(_generic_set(tokens)) and "delete" in tokens:
@@ -261,9 +289,10 @@ def validate_hotkey_system(spec: HotkeySpec | str) -> ValidationResult:
     if registration.ok:
         return registration
 
-    # Windows RegisterHotKey does not reliably reserve side-specific modifier
-    # keys, but the global keyboard listener can still use them for hold-to-talk.
-    if set(hotkey.tokens).issubset({"shift", "shift_l", "shift_r"}):
+    # Windows RegisterHotKey does not reserve mouse buttons and modifier-only
+    # combos reliably, but the global listeners can still use them for hold-to-talk.
+    tokens = set(hotkey.tokens)
+    if tokens & set(MOUSE_ORDER) or tokens.issubset(ANY_MODIFIER):
         return ValidationResult(True)
     return registration
 
@@ -324,7 +353,7 @@ def _windows_hotkey_parts(hotkey: HotkeySpec) -> tuple[int, int | None]:
     if "win" in generic:
         modifiers |= 0x0008
 
-    main_tokens = [token for token in hotkey.tokens if token not in ANY_MODIFIER]
+    main_tokens = [token for token in hotkey.tokens if token not in ANY_MODIFIER and token not in MOUSE_ORDER]
     if main_tokens:
         vk = _vk_code(main_tokens[-1])
     elif len(hotkey.tokens) == 1:
@@ -352,4 +381,11 @@ def _sort_key(token: str) -> tuple[int, str]:
     generic = SIDE_TO_GENERIC.get(token, token)
     if generic in MODIFIER_ORDER:
         return (MODIFIER_ORDER.index(generic), token)
-    return (len(MODIFIER_ORDER), token)
+    if token in MOUSE_ORDER:
+        return (len(MODIFIER_ORDER) + MOUSE_ORDER.index(token), token)
+    return (len(MODIFIER_ORDER) + len(MOUSE_ORDER), token)
+
+
+def _allowed_modifier_only(tokens: set[str]) -> bool:
+    generic = _generic_set(tokens)
+    return len(generic) >= 2 and generic != {"ctrl", "alt"}

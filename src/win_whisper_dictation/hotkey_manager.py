@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 
-from pynput import keyboard
+from pynput import keyboard, mouse
 
 from .hotkey_spec import (
     HotkeySpec,
@@ -34,7 +34,8 @@ class HotkeyManager:
         self._pressed: set[str] = set()
         self._active = False
         self._lock = threading.RLock()
-        self._listener: keyboard.Listener | None = None
+        self._keyboard_listener: keyboard.Listener | None = None
+        self._mouse_listener: mouse.Listener | None = None
 
         self._capture_active = False
         self._capture_pressed: set[str] = set()
@@ -50,17 +51,23 @@ class HotkeyManager:
 
     def start(self) -> None:
         with self._lock:
-            if self._listener:
+            if self._keyboard_listener or self._mouse_listener:
                 return
-            self._listener = keyboard.Listener(on_press=self._on_press, on_release=self._on_release)
-            self._listener.start()
+            self._keyboard_listener = keyboard.Listener(on_press=self._on_key_press, on_release=self._on_key_release)
+            self._mouse_listener = mouse.Listener(on_click=self._on_mouse_click)
+            self._keyboard_listener.start()
+            self._mouse_listener.start()
 
     def stop(self) -> None:
         with self._lock:
-            listener = self._listener
-            self._listener = None
-        if listener:
-            listener.stop()
+            keyboard_listener = self._keyboard_listener
+            mouse_listener = self._mouse_listener
+            self._keyboard_listener = None
+            self._mouse_listener = None
+        if keyboard_listener:
+            keyboard_listener.stop()
+        if mouse_listener:
+            mouse_listener.stop()
 
     def set_hotkey(self, hotkey: str) -> None:
         spec = parse_hotkey(hotkey)
@@ -95,11 +102,28 @@ class HotkeyManager:
             self._capture_complete = None
             self._capture_error = None
 
-    def _on_press(self, key: keyboard.Key | keyboard.KeyCode) -> None:
+    def _on_key_press(self, key: keyboard.Key | keyboard.KeyCode) -> None:
         token = key_to_token(key)
         if not token:
             return
+        self._on_press_token(token)
 
+    def _on_key_release(self, key: keyboard.Key | keyboard.KeyCode) -> None:
+        token = key_to_token(key)
+        if not token:
+            return
+        self._on_release_token(token)
+
+    def _on_mouse_click(self, x: int, y: int, button: mouse.Button, pressed: bool) -> None:
+        token = mouse_button_to_token(button)
+        if not token:
+            return
+        if pressed:
+            self._on_press_token(token)
+        else:
+            self._on_release_token(token)
+
+    def _on_press_token(self, token: str) -> None:
         start = False
         with self._lock:
             if self._capture_active:
@@ -121,11 +145,7 @@ class HotkeyManager:
         if start:
             self._on_start()
 
-    def _on_release(self, key: keyboard.Key | keyboard.KeyCode) -> None:
-        token = key_to_token(key)
-        if not token:
-            return
-
+    def _on_release_token(self, token: str) -> None:
         stop = False
         complete: tuple[CaptureComplete, str, str] | None = None
         error: tuple[CaptureError, str] | None = None
@@ -206,3 +226,18 @@ def key_to_token(key: keyboard.Key | keyboard.KeyCode) -> str | None:
             if len(char) == 1 and char.isascii() and (char.isalpha() or char.isdigit()):
                 return char
     return None
+
+
+def mouse_button_to_token(button: mouse.Button) -> str | None:
+    button_map = {
+        mouse.Button.middle: "mouse_middle",
+        mouse.Button.left: "mouse_left",
+        mouse.Button.right: "mouse_right",
+    }
+    x1 = getattr(mouse.Button, "x1", None)
+    x2 = getattr(mouse.Button, "x2", None)
+    if x1 is not None:
+        button_map[x1] = "mouse_x1"
+    if x2 is not None:
+        button_map[x2] = "mouse_x2"
+    return button_map.get(button)

@@ -13,7 +13,7 @@ from .i18n import normalize_language, normalize_local_model, normalize_processin
 
 @dataclass(frozen=True)
 class AppConfig:
-    hotkey: str = "shift_r"
+    hotkey: str = "shift+win"
     interface_language: str = "ru"
     provider: str = "local"
     model: str = "tiny"

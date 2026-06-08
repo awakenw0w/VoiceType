@@ -2,7 +2,7 @@
 interface_language = "ru"
 
 [dictation]
-hotkey = "shift_r"
+hotkey = "shift+win"
 paste_mode = "clipboard"
 autostart = false
 restore_clipboard = true

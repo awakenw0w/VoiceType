@@ -14,7 +14,6 @@ import numpy as np
 import sounddevice as sd
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
-from . import autostart
 from .audio_devices import SYSTEM_MICROPHONE_ID, list_input_devices, resolve_input_device
 from .config import AppConfig
 from .hotkey_spec import parse_hotkey
@@ -125,9 +124,12 @@ class SettingsWindow:
         processing_hint_var = tk.StringVar()
         current_view = tk.StringVar(value="main")
         provider_trace_id: str | None = None
+        main_trace_ids: list[tuple[tk.Variable, str]] = []
         microphone_trace_id: str | None = None
         processing_trace_id: str | None = None
+        language_trace_id: str | None = None
         microphone_label_to_id: dict[str, str] = {}
+        suppress_live_apply = False
 
         shell = tk.Frame(
             root,
@@ -231,10 +233,20 @@ class SettingsWindow:
                 except tk.TclError:
                     pass
                 provider_trace_id = None
+            while main_trace_ids:
+                variable, trace_id = main_trace_ids.pop()
+                try:
+                    variable.trace_remove("write", trace_id)
+                except tk.TclError:
+                    pass
 
         def clear_settings_traces() -> None:
-            nonlocal microphone_trace_id, processing_trace_id
-            for variable, trace_id in ((microphone_var, microphone_trace_id), (processing_device_var, processing_trace_id)):
+            nonlocal microphone_trace_id, processing_trace_id, language_trace_id
+            for variable, trace_id in (
+                (microphone_var, microphone_trace_id),
+                (processing_device_var, processing_trace_id),
+                (interface_language_var, language_trace_id),
+            ):
                 if trace_id:
                     try:
                         variable.trace_remove("write", trace_id)
@@ -242,6 +254,7 @@ class SettingsWindow:
                         pass
             microphone_trace_id = None
             processing_trace_id = None
+            language_trace_id = None
 
         def clear_frame(frame: tk.Frame) -> None:
             for child in frame.winfo_children():
@@ -265,25 +278,24 @@ class SettingsWindow:
                 font=fonts["caption_bold"],
             ).place(x=89, y=58)
             StatusPill(header, runtime_status_var, fonts["status"], width=170).place(x=488, y=31)
-            WindowButton(
-                header,
-                text="?",
-                tooltip=text_value("minimize"),
-                command=lambda: _minimize_window(root),
-                font=fonts["window"],
-            ).place(x=676, y=30)
-            WindowButton(
-                header,
-                text="?",
-                tooltip=text_value("close"),
-                command=lambda: self._hide(root),
-                font=fonts["window"],
-            ).place(x=718, y=30)
             _bind_drag_tree(header, root, skip_types=(WindowButton,))
 
+        def apply_live_settings() -> None:
+            if suppress_live_apply:
+                return
+            try:
+                new_config = current_config()
+                self._app.apply_settings(new_config, save=False)
+                groq_key_status_var.set(_groq_key_status(new_config))
+                if new_config.device == "cuda" and not gpu_available():
+                    status_var.set(text_value("processing_gpu_unavailable"))
+            except Exception as exc:
+                status_var.set(f"{text_value('settings_error')}: {exc}")
+
         def render_main() -> None:
-            nonlocal provider_trace_id
+            nonlocal provider_trace_id, suppress_live_apply
             current_view.set("main")
+            suppress_live_apply = True
             stop_microphone_test()
             clear_main_trace()
             clear_settings_traces()
@@ -399,22 +411,44 @@ class SettingsWindow:
                 else:
                     groq_model_card.place_forget()
                     local_model_card.place(x=395, y=158)
+                apply_live_settings()
 
             provider_trace_id = provider_var.trace_add("write", update_model_fields)
+            main_trace_ids.extend(
+                [
+                    (groq_model_var, groq_model_var.trace_add("write", lambda *_: apply_live_settings())),
+                    (model_var, model_var.trace_add("write", lambda *_: apply_live_settings())),
+                    (autostart_var, autostart_var.trace_add("write", lambda *_: apply_live_settings())),
+                ]
+            )
             update_model_fields()
 
-            TextButton(
+            RoundedButton(
                 footer,
                 text=text_value("exit"),
                 command=lambda: exit_app(root),
                 font=fonts["body"],
-            ).place(x=32, y=24)
-            TextButton(
+                width=72,
+                height=38,
+                fill=COLORS["white"],
+                hover_fill="#f7f2ea",
+                fg=COLORS["text"],
+                border=COLORS["border_soft"],
+                radius=11,
+            ).place(x=32, y=23)
+            RoundedButton(
                 footer,
                 text=text_value("settings"),
                 command=lambda: render_settings(),
                 font=fonts["body"],
-            ).place(x=96, y=24)
+                width=120,
+                height=38,
+                fill=COLORS["white"],
+                hover_fill="#f7f2ea",
+                fg=COLORS["text"],
+                border=COLORS["border_soft"],
+                radius=11,
+            ).place(x=114, y=23)
             tk.Label(
                 footer,
                 textvariable=status_var,
@@ -422,8 +456,8 @@ class SettingsWindow:
                 fg=COLORS["caption"],
                 font=fonts["caption"],
                 anchor="w",
-                wraplength=280,
-            ).place(x=212, y=25, width=278, height=38)
+                wraplength=250,
+            ).place(x=250, y=25, width=240, height=38)
             RoundedButton(
                 footer,
                 text=text_value("hide"),
@@ -450,6 +484,7 @@ class SettingsWindow:
                 radius=11,
                 shadow=True,
             ).place(x=611, y=21)
+            suppress_live_apply = False
 
         microphone_test_lock = threading.RLock()
         microphone_test_state = {
@@ -567,8 +602,9 @@ class SettingsWindow:
         self._stop_microphone_test = stop_microphone_test
 
         def render_settings() -> None:
-            nonlocal microphone_trace_id, processing_trace_id, microphone_label_to_id
+            nonlocal microphone_trace_id, processing_trace_id, language_trace_id, microphone_label_to_id, suppress_live_apply
             current_view.set("settings")
+            suppress_live_apply = True
             stop_microphone_test()
             clear_main_trace()
             clear_settings_traces()
@@ -632,7 +668,7 @@ class SettingsWindow:
                 values,
                 fonts["body"],
                 self._images.get("chevron"),
-                width=390,
+                width=340,
                 height=48,
             ).place(x=166, y=48)
             RoundedButton(
@@ -640,14 +676,14 @@ class SettingsWindow:
                 text=text_value("microphone_test"),
                 command=lambda: start_microphone_test(),
                 font=fonts["button"],
-                width=142,
+                width=152,
                 height=42,
                 fill=COLORS["accent_soft"],
                 hover_fill=COLORS["accent_hover"],
                 fg=COLORS["accent_text"],
                 radius=11,
-            ).place(x=566, y=51)
-            LevelMeter(audio_card, microphone_level_var, width=390, height=24).place(x=166, y=113)
+            ).place(x=526, y=51)
+            LevelMeter(audio_card, microphone_level_var, width=340, height=24).place(x=166, y=113)
             tk.Label(
                 audio_card,
                 textvariable=microphone_status_var,
@@ -700,10 +736,19 @@ class SettingsWindow:
                 else:
                     microphone_status_var.set(text_value("microphone_ready"))
                 microphone_level_var.set(0.0)
+                apply_live_settings()
 
             def update_processing_hint(*_args) -> None:
                 processing_hint_var.set(processing_device_hint(language(), processing_device_value("cpu")))
+                apply_live_settings()
 
+            def update_language_choice(*_args) -> None:
+                selected = normalize_language(selected_language())
+                current_language.set(selected)
+                apply_live_settings()
+                root.after(0, render_settings)
+
+            language_trace_id = interface_language_var.trace_add("write", update_language_choice)
             microphone_trace_id = microphone_var.trace_add("write", update_microphone_status)
             processing_trace_id = processing_device_var.trace_add("write", update_processing_hint)
             update_processing_hint()
@@ -725,21 +770,8 @@ class SettingsWindow:
             ).place(x=130, y=25, width=355, height=38)
             RoundedButton(
                 footer,
-                text=text_value("apply"),
-                command=lambda: apply_settings(False),
-                font=fonts["button"],
-                width=104,
-                height=42,
-                fill=COLORS["footer"],
-                hover_fill=COLORS["field"],
-                fg=COLORS["text"],
-                border=COLORS["border_soft"],
-                radius=11,
-            ).place(x=495, y=21)
-            RoundedButton(
-                footer,
                 text=text_value("save"),
-                command=lambda: apply_settings(True),
+                command=lambda: save(),
                 font=fonts["button"],
                 width=123,
                 height=42,
@@ -749,6 +781,7 @@ class SettingsWindow:
                 radius=11,
                 shadow=True,
             ).place(x=611, y=21)
+            suppress_live_apply = False
 
         def current_config(hotkey: str | None = None, interface_language: str | None = None) -> AppConfig:
             return replace(
@@ -778,7 +811,7 @@ class SettingsWindow:
                     hotkey_var.set(display)
                     try:
                         new_config = current_config(hotkey=canonical)
-                        self._app.apply_settings(new_config)
+                        self._app.apply_settings(new_config, save=False)
                         groq_key_status_var.set(_groq_key_status(new_config))
                         status_var.set(text_value("hotkey_applied", hotkey=display))
                     except Exception as exc:
@@ -806,7 +839,10 @@ class SettingsWindow:
                 groq_key_status_var.set(_groq_key_status(new_config))
                 current_language.set(normalize_language(new_config.interface_language))
                 status_var.set(text_value("saved"))
-                render_main()
+                if current_view.get() == "settings":
+                    render_settings()
+                else:
+                    render_main()
             except Exception as exc:
                 status_var.set(f"{text_value('settings_error')}: {exc}")
 
@@ -1665,10 +1701,7 @@ def _groq_key_status(config: AppConfig) -> str:
 
 
 def _autostart_state(config: AppConfig) -> bool:
-    try:
-        return autostart.is_enabled()
-    except Exception:
-        return config.autostart
+    return bool(config.autostart)
 
 
 def _label_for(labels: dict[str, str], value: str) -> str:

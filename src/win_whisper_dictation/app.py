@@ -134,7 +134,6 @@ class DictationApp:
         if config.device not in {"auto", "cpu", "cuda"}:
             raise ValueError("Устройство должно быть auto, cpu или cuda")
 
-        autostart_changed = config.autostart != self._config.autostart
         with self._lock:
             self._config = config
             self._hotkeys.set_hotkey(config.hotkey)
@@ -144,7 +143,7 @@ class DictationApp:
             if save:
                 self._config_manager.save(config)
 
-        if save or autostart_changed:
+        if save:
             autostart.set_autostart(config.autostart)
         self._tray.update_status(self._status)
 

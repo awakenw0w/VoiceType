@@ -57,8 +57,8 @@ TRANSLATIONS = {
         "processing_gpu": "Видеокарта",
         "processing_gpu_hint": "Видеокарта — быстрее на поддерживаемых видеокартах, требует совместимые драйверы.",
         "processing_gpu_unavailable": "Видеокарта недоступна. Используется процессор.",
-        "provider_groq": "Нейросеть Groq",
-        "provider_groq_subtitle": "Быстрое облачное распознавание",
+        "provider_groq": "Нейросеть",
+        "provider_groq_subtitle": "Быстрое распознавание нейросетью",
         "provider_local": "Локально",
         "provider_local_subtitle": "Медленнее, без интернета",
         "recognition": "Распознавание",
@@ -92,7 +92,7 @@ TRANSLATIONS = {
         "change": "Change",
         "close": "Close",
         "exit": "Exit",
-        "groq_model": "Neural Model",
+        "groq_model": "AI Model",
         "hide": "Hide",
         "hotkey": "Hotkey",
         "hotkey_applied": "Hotkey applied: {hotkey}.",
@@ -124,8 +124,8 @@ TRANSLATIONS = {
         "processing_gpu": "GPU",
         "processing_gpu_hint": "GPU — Faster on supported graphics cards, requires compatible drivers.",
         "processing_gpu_unavailable": "GPU unavailable. Using CPU.",
-        "provider_groq": "Groq Neural Network",
-        "provider_groq_subtitle": "Fast cloud recognition",
+        "provider_groq": "AI",
+        "provider_groq_subtitle": "Fast AI recognition",
         "provider_local": "Local",
         "provider_local_subtitle": "Slower, no internet",
         "recognition": "Recognition",
@@ -151,14 +151,14 @@ TRANSLATIONS = {
     },
 }
 
-GROQ_MODEL_LABELS = {
+AI_MODEL_LABELS = {
     "ru": {
         "whisper-large-v3-turbo": "Быстрая нейросеть (рекомендуется)",
         "whisper-large-v3": "Точная нейросеть",
     },
     "en": {
-        "whisper-large-v3-turbo": "Fast Neural Model (recommended)",
-        "whisper-large-v3": "Accurate Neural Model",
+        "whisper-large-v3-turbo": "Fast AI (recommended)",
+        "whisper-large-v3": "Accurate AI",
     },
 }
 
@@ -223,7 +223,7 @@ def provider_labels(language: str) -> dict[str, str]:
 
 
 def groq_model_labels(language: str) -> dict[str, str]:
-    return GROQ_MODEL_LABELS[normalize_language(language)]
+    return AI_MODEL_LABELS[normalize_language(language)]
 
 
 def local_model_labels(language: str) -> dict[str, str]:
