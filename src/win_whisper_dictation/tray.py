@@ -29,14 +29,19 @@ class TrayController:
         self._app = app
         self._icon: pystray.Icon | None = None
         self._base_icon = _load_tray_base_icon()
+        self._status_icons: dict[AppStatus, Image.Image] = {}
+        self._last_status: AppStatus | None = None
 
     def run(self) -> None:
+        if self._icon:
+            self.stop()
         self._icon = pystray.Icon(
             "VoiceType",
-            _make_icon(AppStatus.IDLE, self._base_icon),
+            self._icon_for_status(AppStatus.IDLE),
             APP_NAME,
             self._menu(),
         )
+        self._last_status = AppStatus.IDLE
 
         def setup(icon: pystray.Icon) -> None:
             icon.visible = True
@@ -45,15 +50,24 @@ class TrayController:
         self._icon.run(setup=setup)
 
     def stop(self) -> None:
-        if self._icon:
-            self._icon.stop()
+        icon = self._icon
+        self._icon = None
+        self._last_status = None
+        if icon:
+            try:
+                icon.visible = False
+            except Exception:
+                pass
+            icon.stop()
 
     def update_status(self, status: AppStatus, detail: str = "") -> None:
         if not self._icon:
             return
         label = status_label(self._app.config.interface_language, status)
         self._icon.title = f"{APP_NAME} - {label}"
-        self._icon.icon = _make_icon(status, self._base_icon)
+        if status != self._last_status:
+            self._icon.icon = self._icon_for_status(status)
+            self._last_status = status
         try:
             self._icon.update_menu()
         except Exception:
@@ -88,6 +102,11 @@ class TrayController:
 
     def _toggle_pause(self, _icon, _item) -> None:
         self._app.toggle_pause()
+
+    def _icon_for_status(self, status: AppStatus) -> Image.Image:
+        if status not in self._status_icons:
+            self._status_icons[status] = _make_icon(status, self._base_icon)
+        return self._status_icons[status]
 
 
 def _make_icon(status: AppStatus, base_icon: Image.Image | None = None) -> Image.Image:

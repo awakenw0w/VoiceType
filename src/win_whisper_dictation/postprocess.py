@@ -243,25 +243,25 @@ def _remove_fillers(text: str) -> str:
 def _apply_self_corrections(text: str) -> str:
     value = text
     value = re.sub(
-        r"\b(at|in|on|to|for|from|with)\s+\S+\s+(?:no|not|sorry)\s+\1\s+",
+        r"\b(?P<prep>at|in|on|to|for|from|with)\s+[^\s,.;:]+[,.;:]?\s+(?:no|not|sorry)[,.;:]?\s+(?P=prep)\s+",
         lambda match: f"{match.group(1)} ",
         value,
         flags=re.IGNORECASE,
     )
     value = re.sub(
-        r"\b(at|in|on|to|for|from|with)\s+\S+\s+(?:no|not|sorry)\s+",
+        r"\b(?P<prep>at|in|on|to|for|from|with)\s+[^\s,.;:]+[,.;:]?\s+(?:no|not|sorry)[,.;:]?\s+",
         lambda match: f"{match.group(1)} ",
         value,
         flags=re.IGNORECASE,
     )
     value = re.sub(
-        r"(?<!\w)(\u0432|\u0432\u043e|\u043d\u0430|\u043a|\u043a\u043e|\u0441|\u0441\u043e|\u0443|\u0434\u043b\u044f|\u043e\u0442|\u0434\u043e)\s+\S+\s+(?:\u043d\u0435\u0442|\u043e\u0439)\s+\1\s+",
+        r"(?<!\w)(\u0432|\u0432\u043e|\u043d\u0430|\u043a|\u043a\u043e|\u0441|\u0441\u043e|\u0443|\u0434\u043b\u044f|\u043e\u0442|\u0434\u043e)\s+[^\s,.;:]+[,.;:]?\s+(?:\u043d\u0435\u0442|\u043e\u0439)[,.;:]?\s+\1\s+",
         lambda match: f"{match.group(1)} ",
         value,
         flags=re.IGNORECASE,
     )
     value = re.sub(
-        r"(?<!\w)(\u0432|\u0432\u043e|\u043d\u0430|\u043a|\u043a\u043e|\u0441|\u0441\u043e|\u0443|\u0434\u043b\u044f|\u043e\u0442|\u0434\u043e)\s+\S+\s+(?:\u043d\u0435\u0442|\u043e\u0439)\s+",
+        r"(?<!\w)(\u0432|\u0432\u043e|\u043d\u0430|\u043a|\u043a\u043e|\u0441|\u0441\u043e|\u0443|\u0434\u043b\u044f|\u043e\u0442|\u0434\u043e)\s+[^\s,.;:]+[,.;:]?\s+(?:\u043d\u0435\u0442|\u043e\u0439)[,.;:]?\s+",
         lambda match: f"{match.group(1)} ",
         value,
         flags=re.IGNORECASE,

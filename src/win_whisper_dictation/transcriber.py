@@ -112,7 +112,7 @@ class LocalWhisperTranscriber:
             return self._transcribe(audio_path)
         except Exception:
             with self._lock:
-                should_retry_cpu = self._config.device == "auto" and self._actual_device == "cuda"
+                should_retry_cpu = self._config.device in {"auto", "cuda"} and self._actual_device == "cuda"
                 if should_retry_cpu:
                     self._cuda_disabled = True
                     self._model = None
@@ -156,7 +156,7 @@ class LocalWhisperTranscriber:
                 return model
             except Exception as exc:
                 errors.append(f"{device}/{compute_type}: {exc}")
-                if config.device != "auto":
+                if config.device == "cpu":
                     break
         raise RuntimeError("Не удалось загрузить модель faster-whisper: " + " | ".join(errors))
 

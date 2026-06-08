@@ -14,6 +14,14 @@ class PostprocessTests(unittest.TestCase):
     def test_auto_cleanup_handles_fillers_repeats_and_self_correction(self):
         self.assertEqual(postprocess_text("um meeting meeting today", auto_cleanup=True), "Meeting today")
         self.assertEqual(postprocess_text("meeting at 2 no at 3", auto_cleanup=True), "Meeting at 3.")
+        self.assertEqual(
+            postprocess_text("Meeting is at two no at three tomorrow", auto_cleanup=True),
+            "Meeting is at three tomorrow.",
+        )
+        self.assertEqual(
+            postprocess_text("Meeting is at two, no, at three tomorrow", auto_cleanup=True),
+            "Meeting is at three tomorrow.",
+        )
 
     def test_auto_cleanup_handles_russian_self_correction(self):
         text = "\u0432\u0441\u0442\u0440\u0435\u0447\u0430 \u0432 2 \u043d\u0435\u0442 \u0432 3"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import tempfile
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -292,6 +293,7 @@ class SingleInstance:
     def __init__(self, name: str):
         self.already_running = False
         self._handle = None
+        self._lock_file = None
         if sys.platform != "win32":
             return
         import ctypes
@@ -300,8 +302,40 @@ class SingleInstance:
         self._handle = kernel32.CreateMutexW(None, False, name)
         last_error = kernel32.GetLastError()
         self.already_running = last_error == 183
+        if not self.already_running:
+            self._acquire_file_lock()
+
+    def _acquire_file_lock(self) -> None:
+        try:
+            import msvcrt
+
+            path = Path(tempfile.gettempdir()) / "VoiceType.lock"
+            self._lock_file = path.open("a+b")
+            self._lock_file.seek(0)
+            if not self._lock_file.read(1):
+                self._lock_file.write(b"0")
+                self._lock_file.flush()
+            self._lock_file.seek(0)
+            msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            self.already_running = True
+            if self._lock_file:
+                try:
+                    self._lock_file.close()
+                except OSError:
+                    pass
+                self._lock_file = None
 
     def __del__(self):
+        if self._lock_file and sys.platform == "win32":
+            try:
+                import msvcrt
+
+                self._lock_file.seek(0)
+                msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                self._lock_file.close()
+            except Exception:
+                pass
         if self._handle and sys.platform == "win32":
             try:
                 import ctypes

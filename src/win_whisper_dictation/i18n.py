@@ -4,13 +4,13 @@ from .status import AppStatus
 
 
 SUPPORTED_LANGUAGES = ("ru", "en")
-LOCAL_MODEL_VALUES = ("tiny", "small", "large-v3")
+LOCAL_MODEL_VALUES = ("tiny", "small")
 LEGACY_LOCAL_MODEL_MAP = {
     "tiny": "tiny",
     "base": "tiny",
     "small": "small",
-    "medium": "large-v3",
-    "large-v3": "large-v3",
+    "medium": "small",
+    "large-v3": "small",
     "distil-large-v3": "small",
 }
 
@@ -61,10 +61,10 @@ TRANSLATIONS = {
         "processing_gpu": "Видеокарта",
         "processing_gpu_hint": "Видеокарта — быстрее на поддерживаемых видеокартах, требует совместимые драйверы.",
         "processing_gpu_unavailable": "Видеокарта недоступна. Используется процессор.",
-        "provider_groq": "Нейросеть",
-        "provider_groq_subtitle": "Быстрое распознавание нейросетью",
+        "provider_groq": "Нейросеть (рекомендуется)",
+        "provider_groq_subtitle": "Лучшее качество распознавания",
         "provider_local": "Локально",
-        "provider_local_subtitle": "Медленнее, без интернета",
+        "provider_local_subtitle": "Хуже качество, без интернета",
         "recognition": "Распознавание",
         "reload_settings": "Перезагрузить настройки",
         "resume": "Продолжить диктовку",
@@ -138,10 +138,10 @@ TRANSLATIONS = {
         "processing_gpu": "GPU",
         "processing_gpu_hint": "GPU — Faster on supported graphics cards, requires compatible drivers.",
         "processing_gpu_unavailable": "GPU unavailable. Using CPU.",
-        "provider_groq": "AI",
-        "provider_groq_subtitle": "Fast AI recognition",
+        "provider_groq": "AI (recommended)",
+        "provider_groq_subtitle": "Best recognition quality",
         "provider_local": "Local",
-        "provider_local_subtitle": "Slower, no internet",
+        "provider_local_subtitle": "Lower quality, no internet",
         "recognition": "Recognition",
         "reload_settings": "Reload settings",
         "resume": "Resume dictation",
@@ -186,12 +186,10 @@ LOCAL_MODEL_LABELS = {
     "ru": {
         "tiny": "Самая быстрая",
         "small": "Сбалансированная (медленнее)",
-        "large-v3": "Максимальная точность (самая медленная)",
     },
     "en": {
         "tiny": "Fastest",
         "small": "Balanced (slower)",
-        "large-v3": "Maximum accuracy (slowest)",
     },
 }
 
