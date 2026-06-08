@@ -53,6 +53,32 @@ class PostprocessTests(unittest.TestCase):
             "3. \u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0447\u0451\u0442",
         )
 
+    def test_formats_embedded_russian_list_and_keeps_surrounding_text(self):
+        text = (
+            "\u0441\u043c\u043e\u0442\u0440\u0438 \u043f\u0435\u0440\u0432\u043e\u0435 \u0447\u0442\u043e \u043d\u0443\u0436\u043d\u043e \u043a\u0443\u043f\u0438\u0442\u044c "
+            "\u043f\u0435\u0440\u0432\u043e\u0435 \u043c\u043e\u043b\u043e\u043a\u043e "
+            "\u0432\u0442\u043e\u0440\u043e\u0435 \u043f\u043e\u0437\u0432\u043e\u043d\u0438\u0442\u044c \u0410\u043b\u0435\u043a\u0441\u0435\u044e "
+            "\u0442\u0440\u0435\u0442\u044c\u0435 \u043e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0447\u0451\u0442. "
+            "\u041a\u0430\u043a \u044d\u0442\u043e \u0432\u0441\u0451 \u0441\u0434\u0435\u043b\u0430\u0435\u0448\u044c \u0431\u0443\u0434\u0435\u0448\u044c \u0441\u0432\u043e\u0431\u043e\u0434\u0435\u043d"
+        )
+
+        self.assertEqual(
+            postprocess_text(text, format_lists=True),
+            "\u0441\u043c\u043e\u0442\u0440\u0438 \u043f\u0435\u0440\u0432\u043e\u0435 \u0447\u0442\u043e \u043d\u0443\u0436\u043d\u043e \u043a\u0443\u043f\u0438\u0442\u044c\n"
+            "1. \u041c\u043e\u043b\u043e\u043a\u043e\n"
+            "2. \u041f\u043e\u0437\u0432\u043e\u043d\u0438\u0442\u044c \u0410\u043b\u0435\u043a\u0441\u0435\u044e\n"
+            "3. \u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0447\u0451\u0442\n"
+            "\u041a\u0430\u043a \u044d\u0442\u043e \u0432\u0441\u0451 \u0441\u0434\u0435\u043b\u0430\u0435\u0448\u044c \u0431\u0443\u0434\u0435\u0448\u044c \u0441\u0432\u043e\u0431\u043e\u0434\u0435\u043d",
+        )
+
+    def test_formats_embedded_english_list(self):
+        text = "please do this first buy milk second call Alex third send the report. Then you are done"
+
+        self.assertEqual(
+            postprocess_text(text, format_lists=True),
+            "please do this\n1. Buy milk\n2. Call Alex\n3. Send the report\nThen you are done",
+        )
+
     def test_does_not_force_ordinary_text_into_list(self):
         text = "one day I will call Alex two days later"
 

@@ -171,20 +171,21 @@ def format_numbered_list(text: str) -> str:
     matches = list(_list_marker_matches(value))
     if len(matches) < 2:
         return text
-    if matches[0].start() > 2:
-        return text
-    marker_numbers = [LIST_MARKERS[_normalize_marker(match.group(1))] for match in matches]
-    if marker_numbers[0] != 1 or marker_numbers[1] != 2:
-        return text
-    if _normalize_marker(matches[0].group(1)) in {"one", "1", "\u0440\u0430\u0437"} and len(matches) < 3:
-        return text
-    if any(later <= earlier for earlier, later in zip(marker_numbers, marker_numbers[1:])):
+    sequence = _find_list_sequence(matches)
+    if sequence is None:
         return text
 
+    sequence_matches, suffix_start = sequence
+    prefix = value[: sequence_matches[0].start()].strip(" \t\n\r,.;:-")
+    suffix = value[suffix_start:].strip(" \t\n\r,.;:-")
+
     items: list[str] = []
-    for index, match in enumerate(matches):
+    for index, match in enumerate(sequence_matches):
         start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(value)
+        if index + 1 < len(sequence_matches):
+            end = sequence_matches[index + 1].start()
+        else:
+            end = suffix_start
         item = value[start:end].strip(" \t\n\r,.;:-")
         if not item:
             return text
@@ -192,7 +193,14 @@ def format_numbered_list(text: str) -> str:
 
     if len(items) < 2:
         return text
-    return "\n".join(f"{index}. {item}" for index, item in enumerate(items, start=1))
+    list_text = "\n".join(f"{index}. {item}" for index, item in enumerate(items, start=1))
+    parts = []
+    if prefix:
+        parts.append(_final_spacing(prefix))
+    parts.append(list_text)
+    if suffix:
+        parts.append(_final_spacing(suffix))
+    return "\n".join(parts)
 
 
 def _replace_phrases(text: str, replacements: dict[str, str]) -> str:
@@ -207,7 +215,7 @@ def _normalize_symbol_spacing(text: str) -> str:
     value = text
     value = re.sub(r"\s+([,.:;!?%)\]}])", r"\1", value)
     value = re.sub(r"([({\[])\s+", r"\1", value)
-    value = re.sub(r"(?<=[A-Za-z\u0400-\u04ff])\s*\.\s*(?=[A-Za-z\u0400-\u04ff])", ".", value)
+    value = re.sub(r"(?<=[a-zа-яё])\s*\.\s*(?=[a-zа-яё])", ".", value)
     value = re.sub(r"\s*([_/@#=+\\])\s*", r"\1", value)
     value = re.sub(r"(?<=\w)\s*-\s*(?=\w)", "-", value)
     value = re.sub(r":\s*\\", r":\\", value)
@@ -282,6 +290,60 @@ def _looks_like_code_or_path(text: str) -> bool:
 def _list_marker_matches(text: str):
     marker_pattern = "|".join(re.escape(marker) for marker in sorted(LIST_MARKERS, key=len, reverse=True))
     return re.finditer(rf"(?<!\w)({marker_pattern})(?:[.)])?(?!\w)", text, flags=re.IGNORECASE)
+
+
+def _find_list_sequence(matches: list[re.Match[str]]) -> tuple[list[re.Match[str]], int] | None:
+    best: tuple[list[re.Match[str]], int] | None = None
+    for start_index, match in enumerate(matches):
+        first_marker = _normalize_marker(match.group(1))
+        if LIST_MARKERS[first_marker] != 1:
+            continue
+        expected = 2
+        sequence = [match]
+        for candidate in matches[start_index + 1 :]:
+            number = LIST_MARKERS[_normalize_marker(candidate.group(1))]
+            if number == expected:
+                sequence.append(candidate)
+                expected += 1
+                continue
+            if number <= expected - 1:
+                if number == 1 and len(sequence) == 1:
+                    sequence = [candidate]
+                    expected = 2
+                continue
+            break
+        if not _valid_list_sequence(sequence):
+            continue
+        suffix_start = _last_item_end(sequence[-1], matches, sequence, start_index)
+        candidate = (sequence, suffix_start)
+        if best is None or len(sequence) > len(best[0]) or sequence[0].start() > best[0][0].start():
+            best = candidate
+    return best
+
+
+def _valid_list_sequence(sequence: list[re.Match[str]]) -> bool:
+    if len(sequence) < 2:
+        return False
+    first_marker = _normalize_marker(sequence[0].group(1))
+    if first_marker in {"one", "1", "\u0440\u0430\u0437"} and len(sequence) < 3:
+        return False
+    return True
+
+
+def _last_item_end(
+    last_match: re.Match[str],
+    all_matches: list[re.Match[str]],
+    sequence: list[re.Match[str]],
+    start_index: int,
+) -> int:
+    sequence_ids = {id(match) for match in sequence}
+    next_marker = next((match for match in all_matches[start_index + 1 :] if id(match) not in sequence_ids and match.start() > last_match.start()), None)
+    default_end = next_marker.start() if next_marker else len(last_match.string)
+    tail = last_match.string[last_match.end() : default_end]
+    sentence = re.search(r"([.!?])\s+(?=[A-ZА-ЯЁ]|\u041a\u0430\u043a\b|\u043a\u0430\u043a\b|When\b|Then\b|After\b)", tail)
+    if sentence:
+        return last_match.end() + sentence.start(1)
+    return default_end
 
 
 def _normalize_marker(marker: str) -> str:
